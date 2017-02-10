@@ -101,7 +101,8 @@ int get_mqtt_payload(char *buf) {
             (int) ((humidity / 1024.0f) * 100.0f),
             (int) (altitude * 100.0f));
 
-    char imei[16] = {"qwertyuiopasdfg"};
+    const char *imei = network.get_imei();
+
 
 
     // be aware that you need to free these strings after use
