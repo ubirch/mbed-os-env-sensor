@@ -1,0 +1,3 @@
+[submodule "mbed-os-quectelM66-driver"]
+	path = mbed-os-quectelM66-driver
+	url = git@github.com:ubirch/mbed-os-quectelM66-driver.git

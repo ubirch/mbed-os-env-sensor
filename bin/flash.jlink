@@ -1,0 +1,5 @@
+loadbin ./BUILD/UBIRCH1/GCC_ARM/mbed-os-env-sensor.bin, 0x0
+r
+g
+exit
+
