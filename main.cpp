@@ -1,29 +1,30 @@
-/*******************************************************************************
- * Copyright (c) 2014, 2015 IBM Corp.
+/*!
+ * @file
+ * @brief Ubirch Board Environmental Sensor.
  *
- * All rights reserved. This program and the accompanying materials
- * are made available under the terms of the Eclipse Public License v1.0
- * and Eclipse Distribution License v1.0 which accompany this distribution.
+ *Reads the environmental sensor values, signs the payload and sends it
+ * to the backend using MQTT protocol
  *
- * The Eclipse Public License is available at
- *    http://www.eclipse.org/legal/epl-v10.html
- * and the Eclipse Distribution License is available at
- *   http://www.eclipse.org/org/documents/edl-v10.php.
+ * @author Niranjan Rao
+ * @date 2017-02-15
  *
- * Contributors:
- *    Ian Craggs - initial API and implementation and/or initial documentation
- *    Ian Craggs - make sure QoS2 processing works, and add device headers
- *******************************************************************************/
+ * @copyright &copys; 2015, 2016, 2017 ubirch GmbH (https://ubirch.com)
+ *
+ * ```
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ * ```
+ */
 
-/**
- This is a sample program to illustrate the use of the MQTT Client library
- on the mbed platform.  The Client class requires two classes which mediate
- access to system interfaces for networking and timing.  As long as these two
- classes provide the required public programming interfaces, it does not matter
- what facilities they use underneath. In this program, they use the mbed
- system libraries.
-
-*/
 
 #include <BME280.h>
 
@@ -31,79 +32,88 @@
 #include "mbed-os-quectelM66-driver/M66MQTT.h"
 #include "MQTTmbed.h"
 #include "MQTTClient.h"
-#include "config.h"
-#include "crypto/crypto.h"
 
-#define logMessage printf
+#include "crypto/crypto.h"
+#include "config.h"
+
 #define PRINTF printf
 
-bool mqtt_connected = false;
-int arrivedcount = 0;
+#define MQTT_PAYLOAD_LENGTH 600
+#define PRESSURE_SEA_LEVEL 101325
 
-static char *const message_template = "{\"v\":\"0.0.2\",\"a\":\"%s\",\"k\":\"%s\",\"s\":\"%s\",\"p\":%s}";
-static char *const payload_template = "{\"t\":%ld,\"p\":%ld,\"h\":%ld,\"a\":%ld}";
+bool mqtt_connected = false;
+
+static char lat[32];
+static char lon[32];
+
+static int loop_counter = 0;
+
+int arrivedcount = 0;
+int level = 0;
+int voltage = 0;
+uint8_t error_flag = 0x00;
+
+//actual payload template
+static char *const message_template = "{\"id\":\"%s\",\"v\":\"0.0.2\",\"a\":\"%s\",\"k\":\"%s\",\"s\":\"%s\",\"p\":%s}";
+static char *const payload_template = "{\"t\":%ld,\"p\":%ld,\"h\":%ld,\"a\":%ld,\"la\":\"%s\",\"lo\":\"%s\",\"ba\":%d,\"lp\":%d,\"e\":%d}";
+
+char *topic = "EnvSensor";
 
 static uc_ed25519_key uc_key;
+
+float temperature, pressure, humidity, altitude;
 
 DigitalOut led1(LED1);
 BME280       bmeSensor(I2C_SDA, I2C_SCL);
 
 M66Interface network(GSM_UART_TX, GSM_UART_RX, GSM_PWRKEY, GSM_POWER, true);
 MQTTNetwork mqttNetwork(&network);
-MQTT::Client <MQTTNetwork, Countdown> client = MQTT::Client<MQTTNetwork, Countdown>(mqttNetwork);
-
+MQTT::Client <MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH> client = MQTT::Client<MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH>(mqttNetwork);
 
 void messageArrived(MQTT::MessageData& md)
 {
     MQTT::Message &message = md.message;
-    logMessage("Message arrived: qos %d, retained %d, dup %d, packetid %d\r\n", message.qos, message.retained, message.dup, message.id);
-    logMessage("Payload %.*s\r\n", message.payloadlen, (char*)message.payload);
+    PRINTF("Message arrived: qos %d, retained %d, dup %d, packetid %d\r\n", message.qos, message.retained, message.dup, message.id);
+    PRINTF("Payload %.*s\r\n", message.payloadlen, (char*)message.payload);
     ++arrivedcount;
 }
 
-void led_thread(void const *args) {
-    while (true) {
-        led1 = !led1;
-        Thread::wait(1000);
-    }
-}
-osThreadDef(led_thread,   osPriorityNormal, DEFAULT_STACK_SIZE);
-
-
-int get_mqtt_payload(char *buf) {
-
-    float temperature, pressure, humidity, altitude;
-
-    temperature = bmeSensor.getTemperature();
-    pressure = bmeSensor.getPressure();
-    humidity = bmeSensor.getHumidity();
-    altitude = temperature;
-
-//    sprintf(buf, "EnvSensor(%d):: [T -> %2.2fC] [P -> %2.2fhPa] [H -> %2.2f%%]\r\n", msgCount,
-//            temperature,
-//            pressure,
-//            humidity);
+int pubMqttPayload() {
 
     uc_init();
     uc_import_ecc_key(&uc_key, device_ecc_key, device_ecc_key_len);
-
 
     //++++++++++++++++++++++++++++++++++++++++++
     //++++++++++++++++++++++++++++++++++++++++
     // payload structure to be signed
     // Example: '{"t":22.0,"p":1019.5,"h":40.2,"lat":"12.475886","lon":"51.505264","bat":100,"lps":99999}'
     int payload_size = snprintf(NULL, 0, payload_template,
-                                (int) temperature, (int) pressure, (int) ((humidity / 1024.0f) * 100.0f),
-                                (int) (altitude * 100.0f));
+                                (int) temperature, (int) pressure, (int) ((humidity) * 100.0f),
+                                (int) (altitude * 100.0f),
+                                lat, lon, level, loop_counter, error_flag);
     char payload[payload_size];
     sprintf(payload, payload_template,
-            (int) temperature, (int) pressure,
-            (int) ((humidity / 1024.0f) * 100.0f),
-            (int) (altitude * 100.0f));
+            (int) temperature, (int) (pressure), (int) ((humidity) * 100.0f), (int) (altitude * 100.0f),
+            lat, lon, level, loop_counter, error_flag);
+
+    error_flag = 0x00;
 
     const char *imei = network.get_imei();
 
+    uint32_t uuid[4];
 
+    uuid[0] = SIM->UIDH;
+    uuid[1] = SIM->UIDMH;
+    uuid[2] = SIM->UIDML;
+    uuid[3] = SIM->UIDL;
+
+    char uuidMsg[128];
+    sprintf(uuidMsg, "%08lX-%04lX-%04lX-%04lX-%04lX%08lX",
+            uuid[0],                     // 8
+            uuid[1] >> 16,               // 4
+            uuid[1] & 0xFFFF,            // 4
+            uuid[2] >> 16,               // 4
+            uuid[2] & 0xFFFF, uuid[3]);  // 4+8
 
     // be aware that you need to free these strings after use
     char *auth_hash = uc_sha512_encoded((const unsigned char *) imei, strnlen(imei, 15));
@@ -114,32 +124,52 @@ int get_mqtt_payload(char *buf) {
     PRINTF("AUTH     : %s\r\n", auth_hash);
     PRINTF("SIGNATURE: %s\r\n", payload_hash);
 
-    int message_size = snprintf(NULL, 0, message_template, auth_hash, pub_key_hash, payload_hash, payload);
-//    char *message = (char *)malloc((size_t) (message_size + 1));
-    buf = (char *)malloc((size_t) (message_size + 1));
-    sprintf(buf, message_template, auth_hash, pub_key_hash, payload_hash, payload);
+    int message_size = snprintf(NULL, 0, message_template, uuidMsg, auth_hash, pub_key_hash, payload_hash, payload);
+    char *message = (char *) malloc((size_t) (message_size + 1));
+    sprintf(message, message_template, uuidMsg, auth_hash, pub_key_hash, payload_hash, payload);
 
     // free hashes
-    delete(auth_hash);
-    delete(pub_key_hash);
-    delete(payload_hash);
+    delete (auth_hash);
+    delete (pub_key_hash);
+    delete (payload_hash);
 
-    PRINTF("--MESSAGE (%d)\r\n", strlen(buf));
-    PRINTF(buf);
+    PRINTF("--MESSAGE (%d)\r\n", strlen(message));
+    PRINTF(message);
     PRINTF("\r\n--MESSAGE\r\n");
+
+    MQTT::Message mqmessage;
+    uint32_t msgCount = 0;
+    int rc = -1;
+
+    mqmessage.qos = MQTT::QOS0;
+    mqmessage.retained = false;
+    mqmessage.dup = false;
+    mqmessage.payload = (void *) message;
+    mqmessage.payloadlen = strlen(message) + 1;
+
+    rc = client.publish(topic, mqmessage);
+    if (rc != 0) {
+        mqtt_connected = false;
+        printf("pub fail value %d\r\n", rc);
+        return -1;
+    }
+    printf("pub value %d\r\n", rc);
+
+    while (arrivedcount < 1)
+        client.yield(100);
+
+    msgCount++;
+    return 0;
 }
 
 
-int mqtt_send_data() {
+int mqttConnect() {
 
     int rc;
-    float version = 0.6;
-    char *topic = "EnvSensor";
 
-    MQTT::Message message;
-    uint32_t msgCount = 0;
+    char buf[256] = {0};
 
-    logMessage("HelloMQTT: version is %.2f\r\n", version);
+    rtc_datetime_t date_time;
 
     if (!mqtt_connected) {
 
@@ -147,11 +177,27 @@ int mqtt_send_data() {
 
         const char *hostname = UMQTT_HOST;
         int port = UMQTT_HOST_PORT;
+        uint8_t status = 0;
 
-        logMessage("Connecting to %s:%d\r\n", hostname, port);
+
+        bool gotLocation = false;
+        for(int lc = 0; lc < 3 && !gotLocation; lc++) {
+            gotLocation = network.get_location_date(lat, lon, &date_time);
+//                PRINTF("setting current time from GSM\r\n");
+//                PRINTF("%04hd-%02hd-%02hd %02hd:%02hd:%02hd\r\n",
+//                       date_time.year, date_time.month, date_time.day, date_time.hour, date_time.minute, date_time.second);
+            PRINTF("lat is %s lon %s\r\n", lat, lon);
+//                rtc_set(&date);
+
+        }
+
+        network.getModemBattery(&status, &level, &voltage);
+        printf("the battery status %d, level %d, voltage %d\r\n", status, level, voltage);
+
+        PRINTF("Connecting to %s:%d\r\n", hostname, port);
         rc = mqttNetwork.connect(hostname, port);
         if (rc != 0) {
-            logMessage("rc from TCP connect is %d\r\n", rc);
+            PRINTF("rc from TCP connect is %d\r\n", rc);
             mqtt_connected = false;
         }
 
@@ -164,50 +210,56 @@ int mqtt_send_data() {
 
         if ((rc = client.connect(data)) == 0) {
             if ((rc = client.subscribe(topic, MQTT::QOS0, messageArrived)) == 0) {
-                logMessage("Connected and subscribed\r\n");
+                PRINTF("Connected and subscribed\r\n");
                 mqtt_connected = true;
             } else {
-                logMessage("rc from MQTT subscribe is %d\r\n", rc);
+                PRINTF("rc from MQTT subscribe is %d\r\n", rc);
                 mqtt_connected = false;
             }
         } else {
-            logMessage("rc from MQTT connect is %d\r\n", rc);
+            PRINTF("rc from MQTT connect is %d\r\n", rc);
             mqtt_connected = false;
         }
-    }
-
-    while (true) {
-        char buf[300];
-
-        get_mqtt_payload(buf);
-
-        message.qos = MQTT::QOS0;
-        message.retained = false;
-        message.dup = false;
-        message.payload = (void *) buf;
-        message.payloadlen = strlen(buf) + 1;
-
-        rc = client.publish(topic, message);
-        if (rc != 0) {
-            mqtt_connected = false;
-            printf("pub fail value %d\r\n", rc);
-            break;
-        }
-        printf("pub value %d\r\n", rc);
-
-        while (arrivedcount < 1)
-            client.yield(100);
-
-        msgCount++;
-        wait(10);
     }
 }
 
+void led_thread(void const *args) {
+    while (true) {
+        led1 = !led1;
+        Thread::wait(1000);
+    }
+}
+
+
+void bme_thread(void const * args) {
+
+    while (true) {
+        temperature = bmeSensor.getTemperature();
+        pressure = bmeSensor.getPressure();
+        humidity = bmeSensor.getHumidity();
+        altitude = 44330.0f * (1.0f - (float) pow(pressure / (float) PRESSURE_SEA_LEVEL, 1 / 5.255));
+
+        Thread::wait(10000);
+    }
+}
+osThreadDef(led_thread,   osPriorityNormal, DEFAULT_STACK_SIZE);
+osThreadDef(bme_thread,   osPriorityNormal, DEFAULT_STACK_SIZE);
+
 int main(int argc, char* argv[]) {
+
     osThreadCreate(osThread(led_thread), NULL);
+    osThreadCreate(osThread(bme_thread), NULL);
+
+    mqttConnect();
 
     while(1) {
-        mqtt_send_data();
-        wait(10);
+
+        if (!mqtt_connected) {
+            mqttConnect();
+        }
+        pubMqttPayload();
+
+        Thread::wait(10000);
+        loop_counter++;
     }
 }
