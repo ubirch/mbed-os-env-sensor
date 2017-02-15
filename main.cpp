@@ -40,8 +40,18 @@
 
 #define MQTT_PAYLOAD_LENGTH 600
 #define PRESSURE_SEA_LEVEL 101325
+#define TEMPERATURE_THRESHOLD 4000
 
-bool mqtt_connected = false;
+// default wakup interval in seconds
+#define DEFAULT_INTERVAL 10
+#define MAX_INTERVAL 30*60
+
+static int temp_threshold = TEMPERATURE_THRESHOLD;
+// internal sensor state
+static unsigned int interval = DEFAULT_INTERVAL;
+
+static bool mqttConnected = false;
+static bool unsuccessfulSend =  false;
 
 static char lat[32];
 static char lon[32];
@@ -59,16 +69,16 @@ static char *const payload_template = "{\"t\":%ld,\"p\":%ld,\"h\":%ld,\"a\":%ld,
 
 char *topic = "EnvSensor";
 
+// crypto key of the board
 static uc_ed25519_key uc_key;
 
 float temperature, pressure, humidity, altitude;
 
-DigitalOut led1(LED1);
-BME280       bmeSensor(I2C_SDA, I2C_SCL);
-
-M66Interface network(GSM_UART_TX, GSM_UART_RX, GSM_PWRKEY, GSM_POWER, true);
-MQTTNetwork mqttNetwork(&network);
-MQTT::Client <MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH> client = MQTT::Client<MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH>(mqttNetwork);
+DigitalOut    led1(LED1);
+BME280        bmeSensor(I2C_SDA, I2C_SCL);
+M66Interface  network(GSM_UART_TX, GSM_UART_RX, GSM_PWRKEY, GSM_POWER, true);
+MQTTNetwork   mqttNetwork(&network);
+MQTT::Client  <MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH> client = MQTT::Client<MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH>(mqttNetwork);
 
 void messageArrived(MQTT::MessageData& md)
 {
@@ -88,12 +98,12 @@ int pubMqttPayload() {
     // payload structure to be signed
     // Example: '{"t":22.0,"p":1019.5,"h":40.2,"lat":"12.475886","lon":"51.505264","bat":100,"lps":99999}'
     int payload_size = snprintf(NULL, 0, payload_template,
-                                (int) temperature, (int) pressure, (int) ((humidity) * 100.0f),
+                                (int) (temperature * 100.0f), (int) pressure, (int) ((humidity) * 100.0f),
                                 (int) (altitude * 100.0f),
                                 lat, lon, level, loop_counter, error_flag);
     char payload[payload_size];
     sprintf(payload, payload_template,
-            (int) temperature, (int) (pressure), (int) ((humidity) * 100.0f), (int) (altitude * 100.0f),
+            (int) (temperature * 100.0f), (int) (pressure), (int) ((humidity) * 100.0f), (int) (altitude * 100.0f),
             lat, lon, level, loop_counter, error_flag);
 
     error_flag = 0x00;
@@ -149,11 +159,14 @@ int pubMqttPayload() {
 
     rc = client.publish(topic, mqmessage);
     if (rc != 0) {
-        mqtt_connected = false;
-        printf("pub fail value %d\r\n", rc);
+        unsuccessfulSend = true;
+        mqttConnected = false;
+
+        printf("Failed to publish: %d\r\n", rc);
         return -1;
     }
-    printf("pub value %d\r\n", rc);
+
+    unsuccessfulSend = false;
 
     while (arrivedcount < 1)
         client.yield(100);
@@ -171,7 +184,7 @@ int mqttConnect() {
 
     rtc_datetime_t date_time;
 
-    if (!mqtt_connected) {
+    if (!mqttConnected) {
 
         network.connect(CELL_APN, CELL_USER, CELL_PWD);
 
@@ -198,7 +211,7 @@ int mqttConnect() {
         rc = mqttNetwork.connect(hostname, port);
         if (rc != 0) {
             PRINTF("rc from TCP connect is %d\r\n", rc);
-            mqtt_connected = false;
+            mqttConnected = false;
         }
 
         MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
@@ -211,14 +224,14 @@ int mqttConnect() {
         if ((rc = client.connect(data)) == 0) {
             if ((rc = client.subscribe(topic, MQTT::QOS0, messageArrived)) == 0) {
                 PRINTF("Connected and subscribed\r\n");
-                mqtt_connected = true;
+                mqttConnected = true;
             } else {
                 PRINTF("rc from MQTT subscribe is %d\r\n", rc);
-                mqtt_connected = false;
+                mqttConnected = false;
             }
         } else {
             PRINTF("rc from MQTT connect is %d\r\n", rc);
-            mqtt_connected = false;
+            mqttConnected = false;
         }
     }
 }
@@ -229,7 +242,6 @@ void led_thread(void const *args) {
         Thread::wait(1000);
     }
 }
-
 
 void bme_thread(void const * args) {
 
@@ -242,6 +254,7 @@ void bme_thread(void const * args) {
         Thread::wait(10000);
     }
 }
+
 osThreadDef(led_thread,   osPriorityNormal, DEFAULT_STACK_SIZE);
 osThreadDef(bme_thread,   osPriorityNormal, DEFAULT_STACK_SIZE);
 
@@ -252,13 +265,16 @@ int main(int argc, char* argv[]) {
 
     mqttConnect();
 
-    while(1) {
+    while (1) {
 
-        if (!mqtt_connected) {
-            mqttConnect();
+        if (temperature > temp_threshold || (loop_counter % (MAX_INTERVAL / interval) == 0) || unsuccessfulSend) {
+
+            if (!mqttConnected) {
+                mqttConnect();
+            }
+            pubMqttPayload();
+
         }
-        pubMqttPayload();
-
         Thread::wait(10000);
         loop_counter++;
     }
