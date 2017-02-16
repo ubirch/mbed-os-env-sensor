@@ -15,9 +15,9 @@ If the sensor temperature is more than the threshold then the message is sent mo
 - add toolchain `mbed toolchain GCC_ARM`
 #Importing libraries
 we use three mbed libraries in this project BME280, MQTT and WolfSSL. To import these libraries go to project directory and run
-`mbed add http://mbed.org/users/MACRUM/code/BME280/`
-`mbed add http://mbed.org/teams/mqtt/code/MQTT/`
-`mbed add http://mbed.org/users/wolfSSL/code/wolfSSL/`
+- `mbed add http://mbed.org/users/MACRUM/code/BME280/`
+- `mbed add http://mbed.org/teams/mqtt/code/MQTT/`
+- `mbed add http://mbed.org/users/wolfSSL/code/wolfSSL/`
 
 #Add Git Submodule
 We use mbed-os-quectelM66-driver to enable the modem and establish IP connection. 
