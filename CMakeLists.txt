@@ -76,11 +76,26 @@ target_include_directories(mbed-os-quectelM66-driver PUBLIC
         mbed-os-quectelM66-driver/M66ATParser/BufferedSerial/Buffer
         )
 
+add_library(MQTT
+        MQTT/MQTTPacket/MQTTConnectClient.c
+        MQTT/MQTTPacket/MQTTConnectServer.c
+        MQTT/MQTTPacket/MQTTPacket.c
+        MQTT/MQTTPacket/MQTTSerializePublish.c
+        MQTT/MQTTPacket/MQTTSubscribeClient.c
+        MQTT/MQTTPacket/MQTTSubscribeServer.c
+        MQTT/MQTTPacket/MQTTUnsubscribeClient.c
+        MQTT/MQTTPacket/MQTTUnsubscribeServer.c
+        )
+target_include_directories(MQTT PUBLIC
+        MQTT
+        MQTT/MQTTPacket)
+
 add_executable(mbed-os-porting
         main.cpp
         )
-target_link_libraries(mbed-os-porting mbed-os BME280 M66)
+target_link_libraries(mbed-os-porting mbed-os BME280 M66 MQTT)
 
 add_custom_target(mbed-os-porting-compile ALL
         COMMAND mbed compile --profile mbed-os/tools/profiles/debug.json
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+

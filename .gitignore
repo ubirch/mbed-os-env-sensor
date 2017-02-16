@@ -8,3 +8,4 @@ mbed_settings.py
 mbed_settings.pyc
 config.h
 cmake-build-debug/
+.temp

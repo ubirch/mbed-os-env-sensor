@@ -275,7 +275,8 @@ int main(int argc, char* argv[]) {
             pubMqttPayload();
 
         }
-        Thread::wait(10000);
+        client.yield(10*1000);
+//        Thread::wait(10000);
         loop_counter++;
     }
 }
