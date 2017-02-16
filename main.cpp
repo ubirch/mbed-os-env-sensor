@@ -67,7 +67,11 @@ uint8_t error_flag = 0x00;
 static char *const message_template = "{\"id\":\"%s\",\"v\":\"0.0.2\",\"a\":\"%s\",\"k\":\"%s\",\"s\":\"%s\",\"p\":%s}";
 static char *const payload_template = "{\"t\":%ld,\"p\":%ld,\"h\":%ld,\"a\":%ld,\"la\":\"%s\",\"lo\":\"%s\",\"ba\":%d,\"lp\":%d,\"e\":%d}";
 
-char *topic = "EnvSensor";
+//char *topic = "EnvSensor";
+
+static char deviceUUID[128];
+static char *topicTemplate = "ubirch/devices/%s/in/raw";
+static char topic[256];
 
 // crypto key of the board
 static uc_ed25519_key uc_key;
@@ -86,6 +90,24 @@ void messageArrived(MQTT::MessageData& md)
     PRINTF("Message arrived: qos %d, retained %d, dup %d, packetid %d\r\n", message.qos, message.retained, message.dup, message.id);
     PRINTF("Payload %.*s\r\n", message.payloadlen, (char*)message.payload);
     ++arrivedcount;
+}
+
+int getDeviceUUID(char *deviceID) {
+    uint32_t uuid[4];
+
+    uuid[0] = SIM->UIDH;
+    uuid[1] = SIM->UIDMH;
+    uuid[2] = SIM->UIDML;
+    uuid[3] = SIM->UIDL;
+
+    sprintf(deviceID, "%08lX-%04lX-%04lX-%04lX-%04lX%08lX",
+            uuid[0],                     // 8
+            uuid[1] >> 16,               // 4
+            uuid[1] & 0xFFFF,            // 4
+            uuid[2] >> 16,               // 4
+            uuid[2] & 0xFFFF, uuid[3]);  // 4+8
+
+    return true;
 }
 
 int pubMqttPayload() {
@@ -134,9 +156,9 @@ int pubMqttPayload() {
     PRINTF("AUTH     : %s\r\n", auth_hash);
     PRINTF("SIGNATURE: %s\r\n", payload_hash);
 
-    int message_size = snprintf(NULL, 0, message_template, uuidMsg, auth_hash, pub_key_hash, payload_hash, payload);
+    int message_size = snprintf(NULL, 0, message_template, deviceUUID, auth_hash, pub_key_hash, payload_hash, payload);
     char *message = (char *) malloc((size_t) (message_size + 1));
-    sprintf(message, message_template, uuidMsg, auth_hash, pub_key_hash, payload_hash, payload);
+    sprintf(message, message_template, deviceUUID, auth_hash, pub_key_hash, payload_hash, payload);
 
     // free hashes
     delete (auth_hash);
@@ -263,20 +285,28 @@ int main(int argc, char* argv[]) {
     osThreadCreate(osThread(led_thread), NULL);
     osThreadCreate(osThread(bme_thread), NULL);
 
-    mqttConnect();
+    getDeviceUUID(deviceUUID);
+    sprintf(topic, topicTemplate, deviceUUID);
+    printf("the topic is %s\r\n", topic);
+
+    if(mqttConnect()) pubMqttPayload();
 
     while (1) {
 
-        if (temperature > temp_threshold || (loop_counter % (MAX_INTERVAL / interval) == 0) || unsuccessfulSend) {
+        if (temperature > temp_threshold || ((MAX_INTERVAL / interval) % loop_counter == 0) || unsuccessfulSend) {
 
             if (!mqttConnected) {
                 mqttConnect();
             }
             pubMqttPayload();
-
         }
-        client.yield(10*1000);
-//        Thread::wait(10000);
+        printf("going to yeild\r\n");
+        if (mqttConnected) {
+//            client.yield(10 * 1000);
+            Thread::wait(10000);
+        }
+        else Thread::wait(10000);
         loop_counter++;
+        printf("\r\nLoop counter: %d\r\n", loop_counter);
     }
 }
