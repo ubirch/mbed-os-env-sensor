@@ -51,7 +51,7 @@ extern WC_RNG uc_random;
  * @brief Initialize the crypto unit, hardware and random number generator.
  * @return true if already initialized and initialization was successful
  */
-bool uc_init();
+int uc_init();
 
 /*!
  * @brief Encode a byte array in Base64 encoding.
@@ -69,7 +69,7 @@ char *uc_base64_encode(const unsigned char *in, size_t inlen);
  * @param outlen the length of the decoded byte array
  * @return true if the operation was successful, false if not
  */
-bool uc_base64_decode(const char *in, size_t inlen, unsigned char *out, size_t *outlen);
+int uc_base64_decode(const char *in, size_t inlen, unsigned char *out, size_t *outlen);
 
 /*!
  * @brief Create an SHA512 hash from the given message.
@@ -78,7 +78,7 @@ bool uc_base64_decode(const char *in, size_t inlen, unsigned char *out, size_t *
  * @param hash the hash to store the SHA512 digest in (must be preallocated to 64 bytes)
  * @return cStatus_Success for succes or cStatus_Failure if it fails
  */
-bool uc_sha512(const unsigned char *in, size_t inlen, unsigned char *hash);
+int uc_sha512(const unsigned char *in, size_t inlen, unsigned char *hash);
 
 /*!
  * @brief Create a Base64 encoded SHA512 hash from the given message.
@@ -92,7 +92,7 @@ char *uc_sha512_encoded(const unsigned char *in, size_t inlen);
  * @brief Create new ECC key.
  * @param key pointer to the structure to store the key in
  */
-bool uc_ecc_create_key(uc_ed25519_key *key);
+int uc_ecc_create_key(uc_ed25519_key *key);
 
 /*!
  * @brief Import ECC key from array ([32b priv, 32b pub], like raw bytes of key).
@@ -100,7 +100,7 @@ bool uc_ecc_create_key(uc_ed25519_key *key);
  * @param in the data array containing the complete private key
  * @param inlen length of the input array
  */
-bool uc_import_ecc_key(uc_ed25519_key *key, const unsigned char *in, size_t inlen);
+int uc_import_ecc_key(uc_ed25519_key *key, const unsigned char *in, size_t inlen);
 
 /*!
  * @brief Import ECC public key from array.
@@ -108,14 +108,14 @@ bool uc_import_ecc_key(uc_ed25519_key *key, const unsigned char *in, size_t inle
  * @param in the data array containing the public key
  * @param inlen length of the input array
  */
-bool uc_import_ecc_pub_key(uc_ed25519_key *key, const unsigned char *in, size_t inlen);
+int uc_import_ecc_pub_key(uc_ed25519_key *key, const unsigned char *in, size_t inlen);
 
 /*!
  * @brief Import ECC public key from encoded PKCS#8 structure.
  * @param key the key where to store the imported public key
  * @param pkcs8 the PKCS#8 encoded public key
  */
-bool uc_import_ecc_pub_key_encoded(uc_ed25519_key *key, uc_ed25519_pub_pkcs8 *pkcs8);
+int uc_import_ecc_pub_key_encoded(uc_ed25519_key *key, uc_ed25519_pub_pkcs8 *pkcs8);
 
 /*!
  * @brief Export ECC public key.
@@ -123,7 +123,7 @@ bool uc_import_ecc_pub_key_encoded(uc_ed25519_key *key, uc_ed25519_pub_pkcs8 *pk
  * @param pkcs8 the PKCS#8 structure where the public key will be stored
  * @return true if the export is successful
  */
-bool uc_ecc_export_pub(ed25519_key *key, uc_ed25519_pub_pkcs8 *pkcs8);
+int uc_ecc_export_pub(ed25519_key *key, uc_ed25519_pub_pkcs8 *pkcs8);
 
 /*!
  * @brief Export ECC public key Base64 encoded.
@@ -140,7 +140,7 @@ char *uc_ecc_export_pub_encoded(ed25519_key *key);
  * @param signature the byte array to store the signature in, must be preallocated
  * @return true if signature has been created, false if not
  */
-bool uc_ecc_sign(uc_ed25519_key *key, const unsigned char *in, size_t inlen, unsigned char *signature);
+int uc_ecc_sign(uc_ed25519_key *key, const unsigned char *in, size_t inlen, unsigned char *signature);
 
 /*!
  * @brief Sign message using specified ECC key and create Base64 encoded result.
@@ -160,7 +160,7 @@ char *uc_ecc_sign_encoded(uc_ed25519_key *key, const unsigned char *in, size_t i
  * @param siglen the length of the signature
  * @return true if message and signature match
  */
-bool uc_ecc_verify(uc_ed25519_key *key, const unsigned char *in, size_t inlen, const unsigned char *signature, size_t siglen);
+int uc_ecc_verify(uc_ed25519_key *key, const unsigned char *in, size_t inlen, const unsigned char *signature, size_t siglen);
 
 
 

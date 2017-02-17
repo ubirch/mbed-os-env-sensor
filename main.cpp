@@ -30,11 +30,14 @@
 
 #include "mbed-os-quectelM66-driver/M66Interface.h"
 #include "mbed-os-quectelM66-driver/M66MQTT.h"
-#include "MQTTmbed.h"
-#include "MQTTClient.h"
+#include "MQTT/MQTTmbed.h"
+#include "MQTT/MQTTClient.h"
 
 #include "crypto/crypto.h"
 #include "config.h"
+
+#include "response.h"
+#include "sensor.h"
 
 #define PRINTF printf
 
@@ -84,12 +87,50 @@ M66Interface  network(GSM_UART_TX, GSM_UART_RX, GSM_PWRKEY, GSM_POWER, true);
 MQTTNetwork   mqttNetwork(&network);
 MQTT::Client  <MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH> client = MQTT::Client<MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH>(mqttNetwork);
 
+char lastSentMessage[MQTT_PAYLOAD_LENGTH];
+
+void dbg_dump(const char *prefix, const uint8_t *b, size_t size) {
+    for (int i = 0; i < size; i += 16) {
+        if (prefix && strlen(prefix) > 0) printf("%s %06x: ", prefix, i);
+        for (int j = 0; j < 16; j++) {
+            if ((i + j) < size) printf("%02x", b[i + j]); else printf("  ");
+            if ((j+1) % 2 == 0) putchar(' ');
+        }
+        putchar(' ');
+        for (int j = 0; j < 16 && (i + j) < size; j++) {
+            putchar(b[i + j] >= 0x20 && b[i + j] <= 0x7E ? b[i + j] : '.');
+        }
+        printf("\r\n");
+    }
+}
+
 void messageArrived(MQTT::MessageData& md)
 {
     MQTT::Message &message = md.message;
     PRINTF("Message arrived: qos %d, retained %d, dup %d, packetid %d\r\n", message.qos, message.retained, message.dup, message.id);
     PRINTF("Payload %.*s\r\n", message.payloadlen, (char*)message.payload);
     ++arrivedcount;
+
+    if (!strncmp(lastSentMessage, (const char *)message.payload, message.payloadlen)) {
+
+//        char *response = (char *) malloc((size_t) (message.payloadlen + 1));
+        uc_ed25519_pub_pkcs8 response_key;
+        unsigned char response_signature[SHA512_HASH_SIZE];
+        memset(&response_key, 0xff, sizeof(uc_ed25519_pub_pkcs8));
+        memset(response_signature, 0xf7, SHA512_HASH_SIZE);
+
+        char *response_payload = process_response(lastSentMessage, &response_key, response_signature);
+//        free(response);
+
+        dbg_dump("Received KEY    : ", (unsigned char *) &response_key, sizeof(uc_ed25519_pub_pkcs8));
+        dbg_dump("Received SIG    : ", response_signature, sizeof(response_signature));
+          PRINTF("Received PAYLOAD: %s\r\n", response_payload);
+//        PRINTF("KEY    : %s\r\n", (unsigned char *) &response_key);
+//        PRINTF("SIG    : %s\r\n", response_signature);
+//        PRINTF("PAYLOAD: %s\r\n", response_payload);
+
+//        uc_ed25519_key remote_pub;
+    }
 }
 
 int getDeviceUUID(char *deviceID) {
@@ -144,6 +185,7 @@ int pubMqttPayload() {
     int message_size = snprintf(NULL, 0, message_template, deviceUUID, auth_hash, pub_key_hash, payload_hash, payload);
     char *message = (char *) malloc((size_t) (message_size + 1));
     sprintf(message, message_template, deviceUUID, auth_hash, pub_key_hash, payload_hash, payload);
+    strncpy(lastSentMessage, message, message_size);
 
     // free hashes
     delete (auth_hash);
@@ -162,6 +204,7 @@ int pubMqttPayload() {
     mqmessage.dup = false;
     mqmessage.payload = (void *) message;
     mqmessage.payloadlen = strlen(message) + 1;
+
 
     printf("\r\nthe pub topic: %s\r\n", topic);
     rc = client.publish(topic, mqmessage);

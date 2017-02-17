@@ -93,7 +93,7 @@ target_include_directories(MQTT PUBLIC
 add_executable(mbed-os-porting
         main.cpp
         )
-target_link_libraries(mbed-os-porting mbed-os BME280 M66 MQTT)
+target_link_libraries(mbed-os-porting mbed-os BME280)
 
 add_custom_target(mbed-os-porting-compile ALL
         COMMAND mbed compile --profile mbed-os/tools/profiles/debug.json

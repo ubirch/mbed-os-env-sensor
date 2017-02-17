@@ -62,9 +62,9 @@ void dbg_dump(const char *prefix, const uint8_t *b, size_t size) {
 
 WC_RNG uc_random;
 
-static bool initialized = false;
+static int initialized = false;
 
-bool uc_init() {
+int uc_init() {
   if (initialized) return true;
 //  trng_config_t trngConfig;
 //  TRNG_GetDefaultConfig(&trngConfig);
@@ -102,7 +102,7 @@ char *uc_base64_encode(const unsigned char *in, size_t inlen) {
   return encoded_digest;
 }
 
-bool uc_base64_decode(const char *in, size_t inlen, unsigned char *out, size_t *outlen) {
+int uc_base64_decode(const char *in, size_t inlen, unsigned char *out, size_t *outlen) {
   // TODO: check updated version of wolfSSL, which expects outlen+1 bytes, but only decodes outlen
   (*outlen) += 1;
 
@@ -117,7 +117,7 @@ bool uc_base64_decode(const char *in, size_t inlen, unsigned char *out, size_t *
 
 // === SHA512 ===
 
-bool uc_sha512(const unsigned char *in, size_t inlen, unsigned char *hash) {
+int uc_sha512(const unsigned char *in, size_t inlen, unsigned char *hash) {
   Sha512 sha512;
 
   wc_InitSha512(&sha512);
@@ -145,7 +145,7 @@ char *uc_sha512_encoded(const unsigned char *in, size_t inlen) {
 
 // === ED25519 ===
 
-bool uc_ecc_create_key(uc_ed25519_key *key) {
+int uc_ecc_create_key(uc_ed25519_key *key) {
   if (!uc_init()) return false;
 
   wc_ed25519_init(key);
@@ -158,7 +158,7 @@ bool uc_ecc_create_key(uc_ed25519_key *key) {
   return true;
 }
 
-bool uc_import_ecc_key(uc_ed25519_key *key, const unsigned char *in, size_t inlen) {
+int uc_import_ecc_key(uc_ed25519_key *key, const unsigned char *in, size_t inlen) {
   if (inlen != ED25519_PRV_KEY_SIZE) return false;
 
   wc_ed25519_init(key);
@@ -173,7 +173,7 @@ bool uc_import_ecc_key(uc_ed25519_key *key, const unsigned char *in, size_t inle
   return true;
 }
 
-bool uc_import_ecc_pub_key(uc_ed25519_key *key, const unsigned char *in, size_t inlen) {
+int uc_import_ecc_pub_key(uc_ed25519_key *key, const unsigned char *in, size_t inlen) {
   if(inlen != ED25519_PUB_KEY_SIZE) return false;
 
   wc_ed25519_init(key);
@@ -187,12 +187,12 @@ bool uc_import_ecc_pub_key(uc_ed25519_key *key, const unsigned char *in, size_t 
   return true;
 }
 
-bool uc_import_ecc_pub_key_encoded(uc_ed25519_key *key, uc_ed25519_pub_pkcs8 *pkcs8) {
+int uc_import_ecc_pub_key_encoded(uc_ed25519_key *key, uc_ed25519_pub_pkcs8 *pkcs8) {
   return uc_import_ecc_pub_key(key, (const unsigned char *) &(pkcs8->key), sizeof(pkcs8->key));
 }
 
 
-bool uc_ecc_export_pub(ed25519_key *key, uc_ed25519_pub_pkcs8 *pkcs8) {
+int uc_ecc_export_pub(ed25519_key *key, uc_ed25519_pub_pkcs8 *pkcs8) {
   // copy the ASN.1 (PKCS#8) header into the encoded public key array
   memcpy(pkcs8->header, (const unsigned char[]) {
     0x30, 13 + ED25519_PUB_KEY_SIZE, 0x30, 0x08, 0x06, 0x03, 0x2b, 0x65, 0x64, 0x0a, 0x01, 0x01,
@@ -218,7 +218,7 @@ char *uc_ecc_export_pub_encoded(ed25519_key *key) {
 }
 
 
-bool uc_ecc_sign(uc_ed25519_key *key, const unsigned char *in, size_t inlen, unsigned char *signature) {
+int uc_ecc_sign(uc_ed25519_key *key, const unsigned char *in, size_t inlen, unsigned char *signature) {
   word32 len = ED25519_SIG_SIZE;
 
   const int status = wc_ed25519_sign_msg(in, inlen, signature, &len, key);
@@ -238,7 +238,7 @@ char *uc_ecc_sign_encoded(uc_ed25519_key *key, const unsigned char *in, size_t i
   return uc_base64_encode(signature, ED25519_SIG_SIZE);
 }
 
-bool uc_ecc_verify(uc_ed25519_key *key, const unsigned char *in, size_t inlen, const unsigned char *signature, size_t siglen) {
+int uc_ecc_verify(uc_ed25519_key *key, const unsigned char *in, size_t inlen, const unsigned char *signature, size_t siglen) {
   int verification = 0;
   int status = wc_ed25519_verify_msg((byte *) signature, siglen, in, inlen, &verification, key);
   if(status < 0) {
