@@ -132,21 +132,6 @@ int pubMqttPayload() {
 
     const char *imei = network.get_imei();
 
-    uint32_t uuid[4];
-
-    uuid[0] = SIM->UIDH;
-    uuid[1] = SIM->UIDMH;
-    uuid[2] = SIM->UIDML;
-    uuid[3] = SIM->UIDL;
-
-    char uuidMsg[128];
-    sprintf(uuidMsg, "%08lX-%04lX-%04lX-%04lX-%04lX%08lX",
-            uuid[0],                     // 8
-            uuid[1] >> 16,               // 4
-            uuid[1] & 0xFFFF,            // 4
-            uuid[2] >> 16,               // 4
-            uuid[2] & 0xFFFF, uuid[3]);  // 4+8
-
     // be aware that you need to free these strings after use
     char *auth_hash = uc_sha512_encoded((const unsigned char *) imei, strnlen(imei, 15));
     char *pub_key_hash = uc_base64_encode(uc_key.p, 32);
@@ -170,8 +155,7 @@ int pubMqttPayload() {
     PRINTF("\r\n--MESSAGE\r\n");
 
     MQTT::Message mqmessage;
-    uint32_t msgCount = 0;
-    int rc = -1;
+    int rc;
 
     mqmessage.qos = MQTT::QOS0;
     mqmessage.retained = false;
@@ -179,6 +163,7 @@ int pubMqttPayload() {
     mqmessage.payload = (void *) message;
     mqmessage.payloadlen = strlen(message) + 1;
 
+    printf("\r\nthe pub topic: %s\r\n", topic);
     rc = client.publish(topic, mqmessage);
     if (rc != 0) {
         unsuccessfulSend = true;
@@ -190,13 +175,9 @@ int pubMqttPayload() {
 
     unsuccessfulSend = false;
 
-    while (arrivedcount < 1){
-        printf("payload yield\r\n");
+    while (arrivedcount < 1)
         client.yield(100);
 
-    }
-
-    msgCount++;
     return 0;
 }
 
@@ -204,19 +185,16 @@ int pubMqttPayload() {
 int mqttConnect() {
 
     int rc;
-
-    char buf[256] = {0};
-
     rtc_datetime_t date_time;
 
     if (!mqttConnected) {
 
-        network.connect(CELL_APN, CELL_USER, CELL_PWD);
+        if (network.connect(CELL_APN, CELL_USER, CELL_PWD) != 0)
+            return false;
 
         const char *hostname = UMQTT_HOST;
         int port = UMQTT_HOST_PORT;
         uint8_t status = 0;
-
 
         bool gotLocation = false;
         for(int lc = 0; lc < 3 && !gotLocation; lc++) {
@@ -232,16 +210,15 @@ int mqttConnect() {
         network.getModemBattery(&status, &level, &voltage);
         printf("the battery status %d, level %d, voltage %d\r\n", status, level, voltage);
 
-        PRINTF("Connecting to %s:%d\r\n", hostname, port);
-        rc = mqttNetwork.connect(hostname, port);
+        PRINTF("Connecting to %s:%d\r\n", UMQTT_HOST, UMQTT_HOST_PORT);
+        rc = mqttNetwork.connect(UMQTT_HOST, UMQTT_HOST_PORT);
         if (rc != 0) {
             PRINTF("rc from TCP connect is %d\r\n", rc);
             mqttConnected = false;
+            return false;
         }
 
         MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
-        data.keepAliveInterval = 20;
-        data.cleansession = 1;
         data.MQTTVersion = 3;
         data.clientID.cstring = UMQTT_CLIENTID;
         data.username.cstring = UMQTT_USER;
@@ -255,12 +232,15 @@ int mqttConnect() {
             } else {
                 PRINTF("rc from MQTT subscribe is %d\r\n", rc);
                 mqttConnected = false;
+                return false;
             }
         } else {
             PRINTF("rc from MQTT connect is %d\r\n", rc);
             mqttConnected = false;
+            return false;
         }
     }
+    return true;
 }
 
 void led_thread(void const *args) {
@@ -287,13 +267,12 @@ osThreadDef(bme_thread,   osPriorityNormal, DEFAULT_STACK_SIZE);
 
 int main(int argc, char* argv[]) {
 
-    printf("no  yeild\r\n");
     osThreadCreate(osThread(led_thread), NULL);
     osThreadCreate(osThread(bme_thread), NULL);
 
     getDeviceUUID(deviceUUID);
     sprintf(topic, topicTemplate, deviceUUID);
-    printf("the topic is %s\r\n", topic);
+    printf("\r\nTopic to publish in: \"%s\"\r\n", topic);
 
     mqttConnect();
 
@@ -301,22 +280,13 @@ int main(int argc, char* argv[]) {
 
         if (temperature > temp_threshold || ((MAX_INTERVAL / interval) % loop_counter == 0) || unsuccessfulSend) {
 
-            if (!mqttConnected) {
+            if (!mqttConnected)
                 mqttConnect();
-            }
-            pubMqttPayload();
+
+            if (pubMqttPayload() != -1)
+                client.yield();
         }
-        printf("1024\r\n");
-//        if (mqttConnected) {
-//            if(client.yield(10 * 1000) == -1) {
-//                Thread::wait(10000);
-//            }
-            Thread::wait(10000);
-//        }
-//        else Thread::wait(10000);
-//        while (arrivedcount < 1)
-//            client.yield(100);
-        client.yield(1000);
+        Thread::wait(10000);
         loop_counter++;
         printf("\r\nLoop counter: %d\r\n", loop_counter);
     }
