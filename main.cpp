@@ -38,12 +38,12 @@
 
 #define PRINTF printf
 
-#define MQTT_PAYLOAD_LENGTH 600
+#define MQTT_PAYLOAD_LENGTH 1024
 #define PRESSURE_SEA_LEVEL 101325
 #define TEMPERATURE_THRESHOLD 4000
 
 // default wakup interval in seconds
-#define DEFAULT_INTERVAL 10
+#define DEFAULT_INTERVAL 30
 #define MAX_INTERVAL 30*60
 
 static int temp_threshold = TEMPERATURE_THRESHOLD;
@@ -190,8 +190,11 @@ int pubMqttPayload() {
 
     unsuccessfulSend = false;
 
-    while (arrivedcount < 1)
+    while (arrivedcount < 1){
+        printf("payload yield\r\n");
         client.yield(100);
+
+    }
 
     msgCount++;
     return 0;
@@ -237,6 +240,8 @@ int mqttConnect() {
         }
 
         MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
+        data.keepAliveInterval = 20;
+        data.cleansession = 1;
         data.MQTTVersion = 3;
         data.clientID.cstring = UMQTT_CLIENTID;
         data.username.cstring = UMQTT_USER;
@@ -244,7 +249,7 @@ int mqttConnect() {
 
 
         if ((rc = client.connect(data)) == 0) {
-            if ((rc = client.subscribe(topic, MQTT::QOS0, messageArrived)) == 0) {
+            if ((rc = client.subscribe(topic, MQTT::QOS1, messageArrived)) == 0) {
                 PRINTF("Connected and subscribed\r\n");
                 mqttConnected = true;
             } else {
@@ -282,6 +287,7 @@ osThreadDef(bme_thread,   osPriorityNormal, DEFAULT_STACK_SIZE);
 
 int main(int argc, char* argv[]) {
 
+    printf("no  yeild\r\n");
     osThreadCreate(osThread(led_thread), NULL);
     osThreadCreate(osThread(bme_thread), NULL);
 
@@ -289,7 +295,7 @@ int main(int argc, char* argv[]) {
     sprintf(topic, topicTemplate, deviceUUID);
     printf("the topic is %s\r\n", topic);
 
-    if(mqttConnect()) pubMqttPayload();
+    mqttConnect();
 
     while (1) {
 
@@ -300,12 +306,17 @@ int main(int argc, char* argv[]) {
             }
             pubMqttPayload();
         }
-        printf("going to yeild\r\n");
-        if (mqttConnected) {
-//            client.yield(10 * 1000);
+        printf("1024\r\n");
+//        if (mqttConnected) {
+//            if(client.yield(10 * 1000) == -1) {
+//                Thread::wait(10000);
+//            }
             Thread::wait(10000);
-        }
-        else Thread::wait(10000);
+//        }
+//        else Thread::wait(10000);
+//        while (arrivedcount < 1)
+//            client.yield(100);
+        client.yield(1000);
         loop_counter++;
         printf("\r\nLoop counter: %d\r\n", loop_counter);
     }

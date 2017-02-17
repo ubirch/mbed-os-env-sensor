@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 set(CMAKE_BUILD_TYPE Debug)
 
-project(calliope C CXX)
+project(mbedEnvSensor C CXX)
 
 # == MBED OS 5 settings ==
 set(FEATURES netsocket)
