@@ -52,7 +52,7 @@ void dbg_dump(const char *prefix, const uint8_t *b, size_t size) {
 #include "../wolfSSL/wolfssl/wolfcrypt/error-crypt.h"
 #include "crypto.h"
 
-#ifndef NDEBUG
+#ifdef NDEBUG
 #  define UCERROR(p, e)   PRINTF("E: %s: %d\r\n", (p), (e))
 #  define UCDUMP(p, b, s) dbg_dump((p), (b), (s))
 #else

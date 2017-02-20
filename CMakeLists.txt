@@ -88,7 +88,21 @@ add_library(MQTT
         )
 target_include_directories(MQTT PUBLIC
         MQTT
-        MQTT/MQTTPacket)
+        MQTT/MQTTPacket
+        )
+
+add_library(CRYPTO
+        crypto/crypto.c
+        )
+target_include_directories(CRYPTO PUBLIC
+        crypto
+        )
+add_library(JSMN
+        jsmn/jsmn.c
+        )
+target_include_directories(JSMN PUBLIC
+        jsmn
+        )
 
 add_executable(mbed-os-porting
         main.cpp

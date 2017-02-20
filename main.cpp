@@ -30,18 +30,24 @@
 
 #include "mbed-os-quectelM66-driver/M66Interface.h"
 #include "mbed-os-quectelM66-driver/M66MQTT.h"
+
 #include "MQTT/MQTTmbed.h"
 #include "MQTT/MQTTClient.h"
 
 #include "crypto/crypto.h"
-#include "config.h"
-
 #include "response.h"
 #include "sensor.h"
+#include "config.h"
+#include "jsmn/jsmn.h"
 
+
+#ifndef MAINDEBUG
 #define PRINTF printf
+#else
+#define PRINTF(...)
+#endif
 
-#define MQTT_PAYLOAD_LENGTH 1024
+#define MQTT_PAYLOAD_LENGTH 512
 #define PRESSURE_SEA_LEVEL 101325
 #define TEMPERATURE_THRESHOLD 4000
 
@@ -70,11 +76,7 @@ uint8_t error_flag = 0x00;
 static char *const message_template = "{\"id\":\"%s\",\"v\":\"0.0.2\",\"a\":\"%s\",\"k\":\"%s\",\"s\":\"%s\",\"p\":%s}";
 static char *const payload_template = "{\"t\":%ld,\"p\":%ld,\"h\":%ld,\"a\":%ld,\"la\":\"%s\",\"lo\":\"%s\",\"ba\":%d,\"lp\":%d,\"e\":%d}";
 
-//char *topic = "EnvSensor";
-
-static char deviceUUID[128];
 static char *topicTemplate = "ubirch/devices/%s/in/raw";
-static char topic[256];
 
 // crypto key of the board
 static uc_ed25519_key uc_key;
@@ -104,32 +106,82 @@ void dbg_dump(const char *prefix, const uint8_t *b, size_t size) {
     }
 }
 
-void messageArrived(MQTT::MessageData& md)
-{
+// convert a number of characters into an unsigned integer value
+static unsigned int to_uint(const char *ptr, size_t len) {
+    unsigned int ret = 0;
+    for (uint8_t i = 0; i < len; i++) {
+        ret = (ret * 10) + (ptr[i] - '0');
+    }
+    return ret;
+}
+
+/*!
+ * Process payload and set configuration parameters from it.
+ * @param payload the payload to use, should be checked
+ */
+void process_payload(char *payload) {
+    jsmntok_t *token;
+    jsmn_parser parser;
+    jsmn_init(&parser);
+
+    // identify the number of tokens in our response, we expect 13
+    const uint8_t token_count = (const uint8_t) jsmn_parse(&parser, payload, strlen(payload), NULL, 0);
+    token = (jsmntok_t *) malloc(sizeof(*token) * token_count);
+
+    // reset parser, parse and store tokens
+    jsmn_init(&parser);
+    if (jsmn_parse(&parser, payload, strlen(payload), token, token_count) == token_count &&
+        token[0].type == JSMN_OBJECT) {
+        uint8_t index = 0;
+        PRINTF("we have the json object\r\n");
+        while (++index < token_count) {
+            if (jsoneq(payload, &token[index], P_INTERVAL) == 0 && token[index + 1].type == JSMN_PRIMITIVE) {
+                index++;
+                interval = to_uint(payload + token[index].start, (size_t) token[index].end - token[index].start);
+                PRINTF("Interval: %ds\r\n", interval);
+            } else if (jsoneq(payload, &token[index], P_THRESHOLD) == 0 && token[index + 1].type == JSMN_PRIMITIVE) {
+                index++;
+                temp_threshold = to_uint(payload + token[index].start, (size_t) token[index].end - token[index].start);
+                PRINTF("Threshold: %d\r\n", temp_threshold);
+            } else {
+                print_token("unknown key:", payload, &token[index]);
+                index++;
+            }
+        }
+    } else {
+        error_flag |= E_JSON_FAILED;
+    }
+
+    free(token);
+}
+
+void messageArrived(MQTT::MessageData& md) {
     MQTT::Message &message = md.message;
-    PRINTF("Message arrived: qos %d, retained %d, dup %d, packetid %d\r\n", message.qos, message.retained, message.dup, message.id);
-    PRINTF("Payload %.*s\r\n", message.payloadlen, (char*)message.payload);
+    PRINTF("Message arrived: qos %d, retained %d, dup %d, packetid %d\r\n", message.qos, message.retained, message.dup,
+           message.id);
+    PRINTF("Payload %.*s\r\n", message.payloadlen, (char *) message.payload);
     ++arrivedcount;
 
-    if (!strncmp(lastSentMessage, (const char *)message.payload, message.payloadlen)) {
+    if (!strncmp(lastSentMessage, (const char *) message.payload, message.payloadlen)) {
 
-//        char *response = (char *) malloc((size_t) (message.payloadlen + 1));
         uc_ed25519_pub_pkcs8 response_key;
         unsigned char response_signature[SHA512_HASH_SIZE];
         memset(&response_key, 0xff, sizeof(uc_ed25519_pub_pkcs8));
         memset(response_signature, 0xf7, SHA512_HASH_SIZE);
 
         char *response_payload = process_response(lastSentMessage, &response_key, response_signature);
-//        free(response);
 
         dbg_dump("Received KEY    : ", (unsigned char *) &response_key, sizeof(uc_ed25519_pub_pkcs8));
         dbg_dump("Received SIG    : ", response_signature, sizeof(response_signature));
-          PRINTF("Received PAYLOAD: %s\r\n", response_payload);
-//        PRINTF("KEY    : %s\r\n", (unsigned char *) &response_key);
-//        PRINTF("SIG    : %s\r\n", response_signature);
-//        PRINTF("PAYLOAD: %s\r\n", response_payload);
+        PRINTF("Received PAYLOAD: %s\r\n", response_payload);
 
-//        uc_ed25519_key remote_pub;
+        uc_ed25519_key remote_pub;
+        if (uc_import_ecc_pub_key_encoded(&remote_pub, &response_key)) {
+            if (uc_ecc_verify(&remote_pub, (const unsigned char *) response_payload, strlen(response_payload),
+                              response_signature, sizeof(response_signature))) {
+                process_payload(response_payload);
+            }
+        }
     }
 }
 
@@ -182,6 +234,12 @@ int pubMqttPayload() {
     PRINTF("AUTH     : %s\r\n", auth_hash);
     PRINTF("SIGNATURE: %s\r\n", payload_hash);
 
+    static char deviceUUID[128];
+    static char topic[256];
+
+    getDeviceUUID(deviceUUID);
+    sprintf(topic, topicTemplate, deviceUUID);
+
     int message_size = snprintf(NULL, 0, message_template, deviceUUID, auth_hash, pub_key_hash, payload_hash, payload);
     char *message = (char *) malloc((size_t) (message_size + 1));
     sprintf(message, message_template, deviceUUID, auth_hash, pub_key_hash, payload_hash, payload);
@@ -204,7 +262,6 @@ int pubMqttPayload() {
     mqmessage.dup = false;
     mqmessage.payload = (void *) message;
     mqmessage.payloadlen = strlen(message) + 1;
-
 
     printf("\r\nthe pub topic: %s\r\n", topic);
     rc = client.publish(topic, mqmessage);
@@ -267,6 +324,12 @@ int mqttConnect() {
         data.username.cstring = UMQTT_USER;
         data.password.cstring = UMQTT_PWD;
 
+        static char deviceUUID[128];
+        static char topic[256];
+
+        getDeviceUUID(deviceUUID);
+        sprintf(topic, topicTemplate, deviceUUID);
+        printf("\r\nTopic to publish in: \"%s\"\r\n", topic);
 
         if ((rc = client.connect(data)) == 0) {
             if ((rc = client.subscribe(topic, MQTT::QOS1, messageArrived)) == 0) {
@@ -312,10 +375,6 @@ int main(int argc, char* argv[]) {
 
     osThreadCreate(osThread(led_thread), NULL);
     osThreadCreate(osThread(bme_thread), NULL);
-
-    getDeviceUUID(deviceUUID);
-    sprintf(topic, topicTemplate, deviceUUID);
-    printf("\r\nTopic to publish in: \"%s\"\r\n", topic);
 
     mqttConnect();
 
