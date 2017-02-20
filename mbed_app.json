@@ -1,7 +1,7 @@
 {
   "macros": [
     "NDEBUG=1",
-    "OS_TASKCNT=5",
+    "OS_TASKCNT=3",
     "OS_IDLESTKSIZE=32",
     "OS_STKSIZE=1",
     "OS_TIMERS=1",

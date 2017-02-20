@@ -180,7 +180,11 @@ void messageArrived(MQTT::MessageData& md) {
             if (uc_ecc_verify(&remote_pub, (const unsigned char *) response_payload, strlen(response_payload),
                               response_signature, sizeof(response_signature))) {
                 process_payload(response_payload);
+                unsuccessfulSend = false;
             }
+        }
+        else {
+            PRINTF("import public key failed\r\n");
         }
     }
 }
