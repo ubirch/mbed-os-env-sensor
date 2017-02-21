@@ -104,12 +104,12 @@ target_include_directories(JSMN PUBLIC
         jsmn
         )
 
-add_executable(mbed-os-porting
+add_executable(mbed-os-envSensor
         main.cpp
         )
-target_link_libraries(mbed-os-porting mbed-os BME280)
+target_link_libraries(mbed-os-envSensor mbed-os BME280)
 
-add_custom_target(mbed-os-porting-compile ALL
+add_custom_target(mbed-os-envSensor-compile ALL
         COMMAND mbed compile --profile mbed-os/tools/profiles/debug.json
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 

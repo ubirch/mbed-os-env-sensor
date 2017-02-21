@@ -40,7 +40,6 @@
 #include "config.h"
 #include "jsmn/jsmn.h"
 
-
 #ifndef MAINDEBUG
 #define PRINTF printf
 #else
@@ -289,27 +288,16 @@ int pubMqttPayload() {
 int mqttConnect() {
 
     int rc;
+
+    uint8_t status = 0;
+    bool gotLocation = false;
+
     rtc_datetime_t date_time;
 
     if (!mqttConnected) {
 
         if (network.connect(CELL_APN, CELL_USER, CELL_PWD) != 0)
             return false;
-
-        const char *hostname = UMQTT_HOST;
-        int port = UMQTT_HOST_PORT;
-        uint8_t status = 0;
-
-        bool gotLocation = false;
-        for(int lc = 0; lc < 3 && !gotLocation; lc++) {
-            gotLocation = network.get_location_date(lat, lon, &date_time);
-//                PRINTF("setting current time from GSM\r\n");
-//                PRINTF("%04hd-%02hd-%02hd %02hd:%02hd:%02hd\r\n",
-//                       date_time.year, date_time.month, date_time.day, date_time.hour, date_time.minute, date_time.second);
-            PRINTF("lat is %s lon %s\r\n", lat, lon);
-//                rtc_set(&date);
-
-        }
 
         network.getModemBattery(&status, &level, &voltage);
         printf("the battery status %d, level %d, voltage %d\r\n", status, level, voltage);
@@ -349,6 +337,14 @@ int mqttConnect() {
             mqttConnected = false;
             return false;
         }
+    }
+
+    for(int lc = 0; lc < 3 && !gotLocation; lc++) {
+        gotLocation = network.get_location_date(lat, lon, &date_time);
+                PRINTF("setting current time from GSM\r\n");
+                PRINTF("%04hd-%02hd-%02hd %02hd:%02hd:%02hd\r\n",
+                       date_time.year, date_time.month, date_time.day, date_time.hour, date_time.minute, date_time.second);
+                PRINTF("lat is %s lon %s\r\n", lat, lon);
     }
     return true;
 }
