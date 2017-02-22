@@ -23,7 +23,7 @@ If the sensor temperature is more than the threshold limit then the message is s
   `#define WOLFSSL_BASE64_ENCODE` to wolfSSL/user_settings.h
 - The board gets the credentials like **Cell APN, username, password, MQTT username, password, host URL and port number** from `config.h` file, which is ignored by git.
  
-   Copy/ rename the `config.h.template` file as `config.h` and add the credentials 
+   Copy/ rename the [config.h.template](https://github.com/ubirch/mbed-os-env-sensor/blob/master/config.h.template) file as `config.h` and add the credentials 
 
 #Add Git Submodule
 We use mbed-os-quectelM66-driver to enable the modem and establish IP connection. 
@@ -39,7 +39,8 @@ mbed-os-quectelM66-driver directory is already there but empty. Run the below co
 You can find the flash script in `bin` directory
 - run `./bin/flash.sh` to flash using NXP blhost tool
 - alternatively, if you have SEGGER tools installed, run `./bin/flash.sh -j`
-#Debugging
+
+# Debugging
 - To compile Debug Release
 `mbed compile --profile mbed-os/tools/profiles/debug.json`
 - use `-c` to recompile everything
