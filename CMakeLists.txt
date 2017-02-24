@@ -161,6 +161,7 @@ add_library(JSMN jsmn/jsmn.c)
 target_include_directories(JSMN PUBLIC jsmn)
 
 add_executable(mbed-os-envSensor
+        response.c
         main.cpp
         )
 target_link_libraries(mbed-os-envSensor mbed-os BME280)

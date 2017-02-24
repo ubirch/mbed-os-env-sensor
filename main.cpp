@@ -127,7 +127,6 @@ void process_payload(char *payload) {
     if (jsmn_parse(&parser, payload, strlen(payload), token, token_count) == token_count &&
         token[0].type == JSMN_OBJECT) {
         uint8_t index = 0;
-        PRINTF("we have the json object\r\n");
         while (++index < token_count) {
             if (jsoneq(payload, &token[index], P_INTERVAL) == 0 && token[index + 1].type == JSMN_PRIMITIVE) {
                 index++;
@@ -174,11 +173,14 @@ void messageArrived(MQTT::MessageData &md) {
                           response_signature, sizeof(response_signature))) {
             process_payload(response_payload);
             unsuccessfulSend = false;
+        } else {
+            PRINTF("payload verification failed\r\n");
         }
     } else {
         PRINTF("import public key failed\r\n");
     }
 
+    free(response_payload);
 }
 
 int getDeviceUUID(char *deviceID) {
@@ -260,6 +262,10 @@ int pubMqttPayload() {
 
     printf("OUT: %s\r\n", topic);
     rc = client.publish(topic, mqmessage);
+
+    // the message is also dynamically allocated, free it after use
+    free(message);
+
     if (rc != 0) {
         unsuccessfulSend = true;
         mqttConnected = false;
@@ -268,10 +274,11 @@ int pubMqttPayload() {
         return -1;
     }
 
+
     unsuccessfulSend = false;
 
-    while (arrivedcount < 1)
-        client.yield(100);
+//    while (arrivedcount < 1)
+//        client.yield(100);
 
     return 0;
 }
@@ -307,6 +314,7 @@ int mqttConnect() {
         data.clientID.cstring = UMQTT_CLIENTID;
         data.username.cstring = UMQTT_USER;
         data.password.cstring = UMQTT_PWD;
+        data.keepAliveInterval = MAX_INTERVAL;
 
         static char deviceUUID[128];
         static char topic[256];
@@ -371,21 +379,21 @@ int main(int argc, char *argv[]) {
 
     while (1) {
 
-        printf("send? %d %% ((%d / %d) == %d\r\n", loop_counter, MAX_INTERVAL, interval,
-               loop_counter % (MAX_INTERVAL / interval));
-        printf("temp (%d) > threshold (%d)?\r\n", ((int) (temperature * 100)), temp_threshold);
-        printf("unsuccessful? == %d\r\n", unsuccessfulSend);
+//        printf("send? %d %% ((%d / %d) == %d\r\n", loop_counter, MAX_INTERVAL, interval,
+//               loop_counter % (MAX_INTERVAL / interval));
+//        printf("temp (%d) > threshold (%d)?\r\n", ((int) (temperature * 100)), temp_threshold);
+//        printf("unsuccessful? == %d\r\n", unsuccessfulSend);
         if (((int) (temperature * 100)) > temp_threshold || (loop_counter % (MAX_INTERVAL / interval) == 0) ||
             unsuccessfulSend) {
 
             if (!mqttConnected)
                 mqttConnect();
 
-            if (pubMqttPayload() != -1)
-                client.yield();
+            pubMqttPayload();
         }
-        Thread::wait(interval * 1000);
+        client.yield(interval * 1000);
+        //Thread::wait(interval * 1000);
         loop_counter++;
-        printf("\r\nLoop counter: %d\r\n", loop_counter);
+        printf(".");
     }
 }

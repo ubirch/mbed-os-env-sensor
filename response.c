@@ -20,8 +20,10 @@
  * limitations under the License.
  */
 
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include "crypto/crypto.h"
-//#include <fsl_debug_console.h>
 #include "jsmn/jsmn.h"
 #include "sensor.h"
 
