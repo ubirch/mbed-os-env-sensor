@@ -56,7 +56,7 @@ static int temp_threshold = TEMPERATURE_THRESHOLD;
 static unsigned int interval = DEFAULT_INTERVAL;
 
 static bool mqttConnected = false;
-static bool unsuccessfulSend =  false;
+static bool unsuccessfulSend = false;
 
 static char lat[32], lon[32];
 
@@ -78,20 +78,19 @@ static uc_ed25519_key uc_key;
 
 float temperature, pressure, humidity, altitude;
 
-DigitalOut    led1(LED1);
-BME280        bmeSensor(I2C_SDA, I2C_SCL);
-M66Interface  network(GSM_UART_TX, GSM_UART_RX, GSM_PWRKEY, GSM_POWER, true);
-MQTTNetwork   mqttNetwork(&network);
-MQTT::Client  <MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH> client = MQTT::Client<MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH>(mqttNetwork);
-
-char lastSentMessage[MQTT_PAYLOAD_LENGTH];
+DigitalOut led1(LED1);
+BME280 bmeSensor(I2C_SDA, I2C_SCL);
+M66Interface network(GSM_UART_TX, GSM_UART_RX, GSM_PWRKEY, GSM_POWER, true);
+MQTTNetwork mqttNetwork(&network);
+MQTT::Client<MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH> client = MQTT::Client<MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH>(
+mqttNetwork);
 
 void dbg_dump(const char *prefix, const uint8_t *b, size_t size) {
     for (int i = 0; i < size; i += 16) {
         if (prefix && strlen(prefix) > 0) printf("%s %06x: ", prefix, i);
         for (int j = 0; j < 16; j++) {
             if ((i + j) < size) printf("%02x", b[i + j]); else printf("  ");
-            if ((j+1) % 2 == 0) putchar(' ');
+            if ((j + 1) % 2 == 0) putchar(' ');
         }
         putchar(' ');
         for (int j = 0; j < 16 && (i + j) < size; j++) {
@@ -150,38 +149,36 @@ void process_payload(char *payload) {
     free(token);
 }
 
-void messageArrived(MQTT::MessageData& md) {
+void messageArrived(MQTT::MessageData &md) {
     MQTT::Message &message = md.message;
     PRINTF("Message arrived: qos %d, retained %d, dup %d, packetid %d\r\n", message.qos, message.retained, message.dup,
            message.id);
     PRINTF("Payload %.*s\r\n", message.payloadlen, (char *) message.payload);
     ++arrivedcount;
 
-    if (!strncmp(lastSentMessage, (const char *) message.payload, message.payloadlen)) {
+    uc_ed25519_pub_pkcs8 response_key;
+    unsigned char response_signature[SHA512_HASH_SIZE];
+    memset(&response_key, 0xff, sizeof(uc_ed25519_pub_pkcs8));
+    memset(response_signature, 0xf7, SHA512_HASH_SIZE);
 
-        uc_ed25519_pub_pkcs8 response_key;
-        unsigned char response_signature[SHA512_HASH_SIZE];
-        memset(&response_key, 0xff, sizeof(uc_ed25519_pub_pkcs8));
-        memset(response_signature, 0xf7, SHA512_HASH_SIZE);
 
-        char *response_payload = process_response(lastSentMessage, &response_key, response_signature);
+    char *response_payload = process_response((char *) message.payload, &response_key, response_signature);
 
-        dbg_dump("Received KEY    : ", (unsigned char *) &response_key, sizeof(uc_ed25519_pub_pkcs8));
-        dbg_dump("Received SIG    : ", response_signature, sizeof(response_signature));
-        PRINTF("Received PAYLOAD: %s\r\n", response_payload);
+    dbg_dump("Received KEY    : ", (unsigned char *) &response_key, sizeof(uc_ed25519_pub_pkcs8));
+    dbg_dump("Received SIG    : ", response_signature, sizeof(response_signature));
+    PRINTF("Received PAYLOAD: %s\r\n", response_payload);
 
-        uc_ed25519_key remote_pub;
-        if (uc_import_ecc_pub_key_encoded(&remote_pub, &response_key)) {
-            if (uc_ecc_verify(&remote_pub, (const unsigned char *) response_payload, strlen(response_payload),
-                              response_signature, sizeof(response_signature))) {
-                process_payload(response_payload);
-                unsuccessfulSend = false;
-            }
+    uc_ed25519_key remote_pub;
+    if (uc_import_ecc_pub_key_encoded(&remote_pub, &response_key)) {
+        if (uc_ecc_verify(&remote_pub, (const unsigned char *) response_payload, strlen(response_payload),
+                          response_signature, sizeof(response_signature))) {
+            process_payload(response_payload);
+            unsuccessfulSend = false;
         }
-        else {
-            PRINTF("import public key failed\r\n");
-        }
+    } else {
+        PRINTF("import public key failed\r\n");
     }
+
 }
 
 int getDeviceUUID(char *deviceID) {
@@ -242,7 +239,6 @@ int pubMqttPayload() {
     int message_size = snprintf(NULL, 0, message_template, auth_hash, pub_key_hash, payload_hash, payload);
     char *message = (char *) malloc((size_t) (message_size + 1));
     sprintf(message, message_template, auth_hash, pub_key_hash, payload_hash, payload);
-    strncpy(lastSentMessage, message, (size_t) message_size);
 
     // free hashes
     delete (auth_hash);
@@ -335,12 +331,12 @@ int mqttConnect() {
         }
     }
 
-    for(int lc = 0; lc < 3 && !gotLocation; lc++) {
+    for (int lc = 0; lc < 3 && !gotLocation; lc++) {
         gotLocation = network.get_location_date(lat, lon, &date_time);
-                PRINTF("setting current time from GSM\r\n");
-                PRINTF("%04hd-%02hd-%02hd %02hd:%02hd:%02hd\r\n",
-                       date_time.year, date_time.month, date_time.day, date_time.hour, date_time.minute, date_time.second);
-                PRINTF("lat is %s lon %s\r\n", lat, lon);
+        PRINTF("setting current time from GSM\r\n");
+        PRINTF("%04hd-%02hd-%02hd %02hd:%02hd:%02hd\r\n",
+               date_time.year, date_time.month, date_time.day, date_time.hour, date_time.minute, date_time.second);
+        PRINTF("lat is %s lon %s\r\n", lat, lon);
     }
     return true;
 }
@@ -352,7 +348,7 @@ void led_thread(void const *args) {
     }
 }
 
-void bme_thread(void const * args) {
+void bme_thread(void const *args) {
 
     while (true) {
         temperature = bmeSensor.getTemperature();
@@ -364,11 +360,10 @@ void bme_thread(void const * args) {
     }
 }
 
-osThreadDef(led_thread,   osPriorityNormal, DEFAULT_STACK_SIZE);
-osThreadDef(bme_thread,   osPriorityNormal, DEFAULT_STACK_SIZE);
+osThreadDef(led_thread, osPriorityNormal, DEFAULT_STACK_SIZE);
+osThreadDef(bme_thread, osPriorityNormal, DEFAULT_STACK_SIZE);
 
-int main(int argc, char* argv[]) {
-    printf("MQTT\r\n");
+int main(int argc, char *argv[]) {
     osThreadCreate(osThread(led_thread), NULL);
     osThreadCreate(osThread(bme_thread), NULL);
 
@@ -376,7 +371,12 @@ int main(int argc, char* argv[]) {
 
     while (1) {
 
-        if (temperature > temp_threshold || ((MAX_INTERVAL / interval) % loop_counter == 0) || unsuccessfulSend) {
+        printf("send? %d %% ((%d / %d) == %d\r\n", loop_counter, MAX_INTERVAL, interval,
+               loop_counter % (MAX_INTERVAL / interval));
+        printf("temp (%d) > threshold (%d)?\r\n", ((int) (temperature * 100)), temp_threshold);
+        printf("unsuccessful? == %d\r\n", unsuccessfulSend);
+        if (((int) (temperature * 100)) > temp_threshold || (loop_counter % (MAX_INTERVAL / interval) == 0) ||
+            unsuccessfulSend) {
 
             if (!mqttConnected)
                 mqttConnect();
