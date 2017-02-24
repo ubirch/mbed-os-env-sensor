@@ -29,33 +29,6 @@ extern "C" {
 #define E_NO_MEMORY     0b10000000
 #define E_NO_CONNECTION 0b01000000
 
-/* Get source clock for LPTMR driver */
-//#define LPTMR_SOURCE_CLOCK
-
-
-// some prototypes necessary
-//bool display_init(GPIO_Type *gpio, uint32_t pin);
-//
-//void display_print(const char *fmt, ...);
-//
-//void display_printf(const int x, const int y, const char *fmt, ...);
-//
-//void display_logo();
-//
-//void display_line(int x, int y, int x1, int y1);
-//
-//void display_circle(int x, int y, int r, bool on);
-//
-//void display_rect(int x, int y, int x1, int y1, bool color, bool fill);
-//
-//void display_clear();
-//
-//void display_render();
-//
-//void display_render_async();
-//
-//bool display_busy();
-
 #ifdef __cplusplus
 }
 #endif

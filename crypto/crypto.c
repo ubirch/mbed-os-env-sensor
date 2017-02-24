@@ -25,40 +25,38 @@
 #  include <fsl_ltc.h>
 #endif
 
-#define PRINTF printf
-
-void dbg_dump(const char *prefix, const uint8_t *b, size_t size) {
-    for (int i = 0; i < size; i += 16) {
-        if (prefix && strlen(prefix) > 0) printf("%s %06x: ", prefix, i);
-        for (int j = 0; j < 16; j++) {
-            if ((i + j) < size) printf("%02x", b[i + j]); else printf("  ");
-            if ((j+1) % 2 == 0) putchar(' ');
-        }
-        putchar(' ');
-        for (int j = 0; j < 16 && (i + j) < size; j++) {
-            putchar(b[i + j] >= 0x20 && b[i + j] <= 0x7E ? b[i + j] : '.');
-        }
-        printf("\r\n");
-    }
-}
-
-//#include <fsl_trng.h>
-#include "../wolfSSL/wolfssl/wolfcrypt/sha512.h"
-#include "../wolfSSL/wolfssl/wolfcrypt/coding.h"
-#include "../wolfSSL/wolfssl/wolfcrypt/random.h"
-#include "../wolfSSL/wolfssl/wolfcrypt/ed25519.h"
-//#include <ubirch/dbgutil.h>
-//#include <fsl_debug_console.h>
-#include "../wolfSSL/wolfssl/wolfcrypt/error-crypt.h"
+#include <stdio.h>
+#include "wolfssl/wolfcrypt/sha512.h"
+#include "wolfssl/wolfcrypt/coding.h"
+#include "wolfssl/wolfcrypt/random.h"
+#include "wolfssl/wolfcrypt/ed25519.h"
+#include "wolfssl/wolfcrypt/error-crypt.h"
 #include "crypto.h"
 
 #ifdef NDEBUG
-#  define UCERROR(p, e)   PRINTF("E: %s: %d\r\n", (p), (e))
+#  define UCERROR(p, e)   printf("E: %s: %d\r\n", (p), (e))
 #  define UCDUMP(p, b, s) dbg_dump((p), (b), (s))
 #else
 #  define UCERROR(...)
 #  define UCDUMP(...)
 #endif
+
+
+void dbg_dump(const char *prefix, const uint8_t *b, size_t size) {
+  for (int i = 0; i < size; i += 16) {
+    if (prefix && strlen(prefix) > 0) printf("%s %06x: ", prefix, i);
+    for (int j = 0; j < 16; j++) {
+      if ((i + j) < size) printf("%02x", b[i + j]); else printf("  ");
+      if ((j+1) % 2 == 0) putchar(' ');
+    }
+    putchar(' ');
+    for (int j = 0; j < 16 && (i + j) < size; j++) {
+      putchar(b[i + j] >= 0x20 && b[i + j] <= 0x7E ? b[i + j] : '.');
+    }
+    printf("\r\n");
+  }
+}
+
 
 WC_RNG uc_random;
 

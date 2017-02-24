@@ -33,6 +33,7 @@
 
 #include "MQTT/MQTTmbed.h"
 #include "MQTT/MQTTClient.h"
+#include "MQTT/MQTTPacket/MQTTConnect.h"
 
 #include "crypto/crypto.h"
 #include "response.h"
@@ -50,10 +51,6 @@
 #define PRESSURE_SEA_LEVEL 101325
 #define TEMPERATURE_THRESHOLD 4000
 
-// default wakup interval in seconds
-#define DEFAULT_INTERVAL 30
-#define MAX_INTERVAL 30*60
-
 static int temp_threshold = TEMPERATURE_THRESHOLD;
 // internal sensor state
 static unsigned int interval = DEFAULT_INTERVAL;
@@ -61,8 +58,7 @@ static unsigned int interval = DEFAULT_INTERVAL;
 static bool mqttConnected = false;
 static bool unsuccessfulSend =  false;
 
-static char lat[32];
-static char lon[32];
+static char lat[32], lon[32];
 
 static int loop_counter = 0;
 
@@ -72,10 +68,10 @@ int voltage = 0;
 uint8_t error_flag = 0x00;
 
 //actual payload template
-static char *const message_template = "{\"id\":\"%s\",\"v\":\"0.0.2\",\"a\":\"%s\",\"k\":\"%s\",\"s\":\"%s\",\"p\":%s}";
-static char *const payload_template = "{\"t\":%ld,\"p\":%ld,\"h\":%ld,\"a\":%ld,\"la\":\"%s\",\"lo\":\"%s\",\"ba\":%d,\"lp\":%d,\"e\":%d}";
+static const char *const message_template = "{\"v\":\"0.0.2\",\"a\":\"%s\",\"k\":\"%s\",\"s\":\"%s\",\"p\":%s}";
+static const char *const payload_template = "{\"t\":%ld,\"p\":%ld,\"h\":%ld,\"a\":%ld,\"la\":\"%s\",\"lo\":\"%s\",\"ba\":%d,\"lp\":%d,\"e\":%d}";
 
-static char *topicTemplate = "ubirch/devices/%s/in/raw";
+static const char *topicTemplate = "mwc/ubirch/devices/%s/%s";
 
 // crypto key of the board
 static uc_ed25519_key uc_key;
@@ -241,12 +237,12 @@ int pubMqttPayload() {
     static char topic[256];
 
     getDeviceUUID(deviceUUID);
-    sprintf(topic, topicTemplate, deviceUUID);
+    sprintf(topic, topicTemplate, deviceUUID, "in");
 
-    int message_size = snprintf(NULL, 0, message_template, deviceUUID, auth_hash, pub_key_hash, payload_hash, payload);
+    int message_size = snprintf(NULL, 0, message_template, auth_hash, pub_key_hash, payload_hash, payload);
     char *message = (char *) malloc((size_t) (message_size + 1));
-    sprintf(message, message_template, deviceUUID, auth_hash, pub_key_hash, payload_hash, payload);
-    strncpy(lastSentMessage, message, message_size);
+    sprintf(message, message_template, auth_hash, pub_key_hash, payload_hash, payload);
+    strncpy(lastSentMessage, message, (size_t) message_size);
 
     // free hashes
     delete (auth_hash);
@@ -266,7 +262,7 @@ int pubMqttPayload() {
     mqmessage.payload = (void *) message;
     mqmessage.payloadlen = strlen(message) + 1;
 
-    printf("\r\nthe pub topic: %s\r\n", topic);
+    printf("OUT: %s\r\n", topic);
     rc = client.publish(topic, mqmessage);
     if (rc != 0) {
         unsuccessfulSend = true;
@@ -320,8 +316,8 @@ int mqttConnect() {
         static char topic[256];
 
         getDeviceUUID(deviceUUID);
-        sprintf(topic, topicTemplate, deviceUUID);
-        printf("\r\nTopic to publish in: \"%s\"\r\n", topic);
+        sprintf(topic, topicTemplate, deviceUUID, "out");
+        printf("IN: \"%s\"\r\n", topic);
 
         if ((rc = client.connect(data)) == 0) {
             if ((rc = client.subscribe(topic, MQTT::QOS1, messageArrived)) == 0) {
@@ -372,7 +368,7 @@ osThreadDef(led_thread,   osPriorityNormal, DEFAULT_STACK_SIZE);
 osThreadDef(bme_thread,   osPriorityNormal, DEFAULT_STACK_SIZE);
 
 int main(int argc, char* argv[]) {
-
+    printf("MQTT\r\n");
     osThreadCreate(osThread(led_thread), NULL);
     osThreadCreate(osThread(bme_thread), NULL);
 
@@ -388,7 +384,7 @@ int main(int argc, char* argv[]) {
             if (pubMqttPayload() != -1)
                 client.yield();
         }
-        Thread::wait(10000);
+        Thread::wait(interval * 1000);
         loop_counter++;
         printf("\r\nLoop counter: %d\r\n", loop_counter);
     }
