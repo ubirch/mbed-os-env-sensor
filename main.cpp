@@ -59,6 +59,7 @@ static bool mqttConnected = false;
 static bool unsuccessfulSend = false;
 
 static char lat[32], lon[32];
+static char deviceUUID[37];
 
 static int loop_counter = 0;
 
@@ -69,7 +70,7 @@ uint8_t error_flag = 0x00;
 
 //actual payload template
 static const char *const message_template = "{\"v\":\"0.0.2\",\"a\":\"%s\",\"k\":\"%s\",\"s\":\"%s\",\"p\":%s}";
-static const char *const payload_template = "{\"t\":%ld,\"p\":%ld,\"h\":%ld,\"a\":%ld,\"la\":\"%s\",\"lo\":\"%s\",\"ba\":%d,\"lp\":%d,\"e\":%d}";
+static const char *const payload_template = "{\"t\":%d,\"p\":%d,\"h\":%d,\"a\":%d,\"la\":\"%s\",\"lo\":\"%s\",\"ba\":%d,\"lp\":%d,\"e\":%d}";
 
 static const char *topicTemplate = "mwc/ubirch/devices/%s/%s";
 
@@ -201,7 +202,7 @@ int getDeviceUUID(char *deviceID) {
     return true;
 }
 
-int pubMqttPayload() {
+int pubMqttPayload(char *topic) {
 
     uc_init();
     uc_import_ecc_key(&uc_key, device_ecc_key, device_ecc_key_len);
@@ -214,7 +215,7 @@ int pubMqttPayload() {
                                 (int) (temperature * 100.0f), (int) pressure, (int) ((humidity) * 100.0f),
                                 (int) (altitude * 100.0f),
                                 lat, lon, level, loop_counter, error_flag);
-    char payload[payload_size];
+    char *payload = (char *)malloc((size_t) payload_size);
     sprintf(payload, payload_template,
             (int) (temperature * 100.0f), (int) (pressure), (int) ((humidity) * 100.0f), (int) (altitude * 100.0f),
             lat, lon, level, loop_counter, error_flag);
@@ -231,12 +232,6 @@ int pubMqttPayload() {
     PRINTF("PUBKEY   : %s\r\n", pub_key_hash);
     PRINTF("AUTH     : %s\r\n", auth_hash);
     PRINTF("SIGNATURE: %s\r\n", payload_hash);
-
-    static char deviceUUID[128];
-    static char topic[256];
-
-    getDeviceUUID(deviceUUID);
-    sprintf(topic, topicTemplate, deviceUUID, "in");
 
     int message_size = snprintf(NULL, 0, message_template, auth_hash, pub_key_hash, payload_hash, payload);
     char *message = (char *) malloc((size_t) (message_size + 1));
@@ -284,7 +279,7 @@ int pubMqttPayload() {
 }
 
 
-int mqttConnect() {
+int mqttConnect(char *topic, char *deviceUUID) {
 
     int rc;
 
@@ -309,19 +304,14 @@ int mqttConnect() {
             return false;
         }
 
+
         MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
         data.MQTTVersion = 3;
-        data.clientID.cstring = UMQTT_CLIENTID;
+        data.clientID.cstring = deviceUUID;
         data.username.cstring = UMQTT_USER;
         data.password.cstring = UMQTT_PWD;
         data.keepAliveInterval = MAX_INTERVAL;
 
-        static char deviceUUID[128];
-        static char topic[256];
-
-        getDeviceUUID(deviceUUID);
-        sprintf(topic, topicTemplate, deviceUUID, "out");
-        printf("IN: \"%s\"\r\n", topic);
 
         if ((rc = client.connect(data)) == 0) {
             if ((rc = client.subscribe(topic, MQTT::QOS1, messageArrived)) == 0) {
@@ -375,24 +365,31 @@ int main(int argc, char *argv[]) {
     osThreadCreate(osThread(led_thread), NULL);
     osThreadCreate(osThread(bme_thread), NULL);
 
-    mqttConnect();
+    getDeviceUUID(deviceUUID);
+    int len = snprintf(NULL, 0, topicTemplate, deviceUUID, "out");
+    char *topic_receive = (char *)malloc((size_t) len);
+    sprintf(topic_receive, topicTemplate, deviceUUID, "out");
+    printf("RECEIVE: \"%s\"\r\n", topic_receive);
+
+    len = snprintf(NULL, 0, topicTemplate, deviceUUID, "");
+    char *topic_send = (char *)malloc((size_t) len);
+    sprintf(topic_send, topicTemplate, deviceUUID, "");
+    printf("SEND: \"%s\"\r\n", topic_send);
+
+    mqttConnect(topic_receive, deviceUUID);
 
     while (1) {
-
 //        printf("send? %d %% ((%d / %d) == %d\r\n", loop_counter, MAX_INTERVAL, interval,
 //               loop_counter % (MAX_INTERVAL / interval));
 //        printf("temp (%d) > threshold (%d)?\r\n", ((int) (temperature * 100)), temp_threshold);
 //        printf("unsuccessful? == %d\r\n", unsuccessfulSend);
-        if (((int) (temperature * 100)) > temp_threshold || (loop_counter % (MAX_INTERVAL / interval) == 0) ||
-            unsuccessfulSend) {
-
+        if (((int) (temperature * 100)) > temp_threshold || (loop_counter % (MAX_INTERVAL / interval) == 0) || unsuccessfulSend) {
             if (!mqttConnected)
-                mqttConnect();
+                mqttConnect(topic_receive, deviceUUID);
 
-            pubMqttPayload();
+            pubMqttPayload(topic_send);
         }
-        client.yield(interval * 1000);
-        //Thread::wait(interval * 1000);
+        client.yield(10000);
         loop_counter++;
         printf(".");
     }
