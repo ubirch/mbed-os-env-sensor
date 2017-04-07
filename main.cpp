@@ -28,12 +28,8 @@
 
 #include <BME280.h>
 
+#include "mbed-kinetis-lowpower/kinetis_lowpower.h"
 #include "mbed-os-quectelM66-driver/M66Interface.h"
-#include "mbed-os-quectelM66-driver/M66MQTT.h"
-
-#include "MQTT/MQTTmbed.h"
-#include "MQTT/MQTTClient.h"
-#include "MQTT/MQTTPacket/MQTTConnect.h"
 
 #include "crypto/crypto.h"
 #include "response.h"
@@ -69,8 +65,13 @@ int voltage = 0;
 uint8_t error_flag = 0x00;
 
 //actual payload template
-static const char *const message_template = "{\"v\":\"0.0.2\",\"a\":\"%s\",\"k\":\"%s\",\"s\":\"%s\",\"p\":%s}";
 static const char *const payload_template = "{\"t\":%d,\"p\":%d,\"h\":%d,\"a\":%d,\"la\":\"%s\",\"lo\":\"%s\",\"ba\":%d,\"lp\":%d,\"e\":%d}";
+
+static const char *const message_template = "POST /api/avatarService/v1/device/update HTTP/1.1\r\n"
+"Host: api.demo.dev.ubirch.com:8080\r\n"
+"\r\n"
+"{\"v\":\"0.0.2\",\"a\":\"%s\",\"k\":\"%s\",\"s\":\"%s\",\"p\":%s}"
+"\r\n";
 
 static const char *topicTemplate = "mwc/ubirch/devices/%s/%s";
 
@@ -79,12 +80,8 @@ static uc_ed25519_key uc_key;
 
 float temperature, pressure, humidity, altitude;
 
-DigitalOut led1(LED1);
 BME280 bmeSensor(I2C_SDA, I2C_SCL);
 M66Interface network(GSM_UART_TX, GSM_UART_RX, GSM_PWRKEY, GSM_POWER, true);
-MQTTNetwork mqttNetwork(&network);
-MQTT::Client<MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH> client = MQTT::Client<MQTTNetwork, Countdown, MQTT_PAYLOAD_LENGTH>(
-mqttNetwork);
 
 void dbg_dump(const char *prefix, const uint8_t *b, size_t size) {
     for (int i = 0; i < size; i += 16) {
@@ -149,20 +146,14 @@ void process_payload(char *payload) {
     free(token);
 }
 
-void messageArrived(MQTT::MessageData &md) {
-    MQTT::Message &message = md.message;
-    PRINTF("Message arrived: qos %d, retained %d, dup %d, packetid %d\r\n", message.qos, message.retained, message.dup,
-           message.id);
-    PRINTF("Payload %.*s\r\n", message.payloadlen, (char *) message.payload);
-    ++arrivedcount;
-
+void messageArrived(char *buf) {
     uc_ed25519_pub_pkcs8 response_key;
     unsigned char response_signature[SHA512_HASH_SIZE];
     memset(&response_key, 0xff, sizeof(uc_ed25519_pub_pkcs8));
     memset(response_signature, 0xf7, SHA512_HASH_SIZE);
 
 
-    char *response_payload = process_response((char *) message.payload, &response_key, response_signature);
+    char *response_payload = process_response(buf, &response_key, response_signature);
 
     dbg_dump("Received KEY    : ", (unsigned char *) &response_key, sizeof(uc_ed25519_pub_pkcs8));
     dbg_dump("Received SIG    : ", response_signature, sizeof(response_signature));
@@ -204,6 +195,40 @@ int getDeviceUUID(char *deviceID) {
 
 int pubMqttPayload(char *topic) {
 
+    TCPSocket socket;
+
+    int rc;
+    int ret;
+
+    uint8_t status = 0;
+    bool gotLocation = false;
+
+    rtc_datetime_t date_time;
+
+
+    if (network.connect(CELL_APN, CELL_USER, CELL_PWD) != 0)
+        return false;
+
+    socket.open(&network);
+    socket.set_timeout(0);
+
+    network.getModemBattery(&status, &level, &voltage);
+    printf("the battery status %d, level %d, voltage %d\r\n", status, level, voltage);
+
+    PRINTF("Connecting to %s:%d\r\n", UMQTT_HOST, UMQTT_HOST_PORT);
+    char theIP[20];
+    bool ipret = network.queryIP("api.demo.dev.ubirch.com", theIP);
+
+    ret = socket.connect(theIP, 8080);
+
+    for (int lc = 0; lc < 3 && !gotLocation; lc++) {
+        gotLocation = network.get_location_date(lat, lon, &date_time);
+        PRINTF("setting current time from GSM\r\n");
+        PRINTF("%04hd-%02hd-%02hd %02hd:%02hd:%02hd\r\n",
+               date_time.year, date_time.month, date_time.day, date_time.hour, date_time.minute, date_time.second);
+        PRINTF("lat is %s lon %s\r\n", lat, lon);
+    }
+
     uc_init();
     uc_import_ecc_key(&uc_key, device_ecc_key, device_ecc_key_len);
 
@@ -236,6 +261,7 @@ int pubMqttPayload(char *topic) {
     int message_size = snprintf(NULL, 0, message_template, auth_hash, pub_key_hash, payload_hash, payload);
     char *message = (char *) malloc((size_t) (message_size + 1));
     sprintf(message, message_template, auth_hash, pub_key_hash, payload_hash, payload);
+    PRINTF("message_size%d\r\n", message_size);
 
     // free hashes
     delete (auth_hash);
@@ -246,105 +272,43 @@ int pubMqttPayload(char *topic) {
     PRINTF(message);
     PRINTF("\r\n--MESSAGE\r\n");
 
-    MQTT::Message mqmessage;
-    int rc;
+//    if (ret >= 0) {
 
-    mqmessage.qos = MQTT::QOS0;
-    mqmessage.retained = false;
-    mqmessage.dup = false;
-    mqmessage.payload = (void *) message;
-    mqmessage.payloadlen = strlen(message) + 1;
+        int r = socket.send(message, strlen(message));
+        if (r > 0) {
+            // Recieve a simple http response and print out the response line
+            int buffer_size = message_size;
+            char *buffer = (char *) malloc((size_t) (message_size + 1));
 
-    printf("OUT: %s\r\n", topic);
-    rc = client.publish(topic, mqmessage);
+            printf("now receive the data\r\n");
+            r = socket.recv(buffer, 512);
+            if (r >= 0) {
+                printf("received %d bytes\r\n---\r\n%.*s\r\n---\r\n", r,
+                       (int) (strstr(buffer, "\r\n") - buffer),
+                       buffer);
 
-    // the message is also dynamically allocated, free it after use
-    free(message);
+            } else {
+                printf("receive failed: %d\r\n", r);
+            }
+        } else {
+            printf("send failed: %d\r\n", r);
+        }
 
-    if (rc != 0) {
-        unsuccessfulSend = true;
-        mqttConnected = false;
+        free(message);
+//    }
+    // Close the socket to return its memory and bring down the network interface
+    socket.close();
 
-        printf("Failed to publish: %d\r\n", rc);
-        return -1;
-    }
-
-
-    unsuccessfulSend = false;
-
-//    while (arrivedcount < 1)
-//        client.yield(100);
-
+    network.powerDown();
     return 0;
 }
 
-
-int mqttConnect(char *topic, char *deviceUUID) {
-
-    int rc;
-
-    uint8_t status = 0;
-    bool gotLocation = false;
-
-    rtc_datetime_t date_time;
-
-    if (!mqttConnected) {
-
-        if (network.connect(CELL_APN, CELL_USER, CELL_PWD) != 0)
-            return false;
-
-        network.getModemBattery(&status, &level, &voltage);
-        printf("the battery status %d, level %d, voltage %d\r\n", status, level, voltage);
-
-        PRINTF("Connecting to %s:%d\r\n", UMQTT_HOST, UMQTT_HOST_PORT);
-        rc = mqttNetwork.connect(UMQTT_HOST, UMQTT_HOST_PORT);
-        if (rc != 0) {
-            PRINTF("rc from TCP connect is %d\r\n", rc);
-            mqttConnected = false;
-            return false;
-        }
-
-
-        MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
-        data.MQTTVersion = 3;
-        data.clientID.cstring = deviceUUID;
-        data.username.cstring = UMQTT_USER;
-        data.password.cstring = UMQTT_PWD;
-        data.keepAliveInterval = MAX_INTERVAL;
-
-
-        if ((rc = client.connect(data)) == 0) {
-            if ((rc = client.subscribe(topic, MQTT::QOS1, messageArrived)) == 0) {
-                PRINTF("Connected and subscribed\r\n");
-                mqttConnected = true;
-            } else {
-                PRINTF("rc from MQTT subscribe is %d\r\n", rc);
-                mqttConnected = false;
-                return false;
-            }
-        } else {
-            PRINTF("rc from MQTT connect is %d\r\n", rc);
-            mqttConnected = false;
-            return false;
-        }
-    }
-
-    for (int lc = 0; lc < 3 && !gotLocation; lc++) {
-        gotLocation = network.get_location_date(lat, lon, &date_time);
-        PRINTF("setting current time from GSM\r\n");
-        PRINTF("%04hd-%02hd-%02hd %02hd:%02hd:%02hd\r\n",
-               date_time.year, date_time.month, date_time.day, date_time.hour, date_time.minute, date_time.second);
-        PRINTF("lat is %s lon %s\r\n", lat, lon);
-    }
-    return true;
-}
-
-void led_thread(void const *args) {
-    while (true) {
-        led1 = !led1;
-        Thread::wait(1000);
-    }
-}
+//void led_thread(void const *args) {
+//    while (true) {
+//        led1 = !led1;
+//        Thread::wait(1000);
+//    }
+//}
 
 void bme_thread(void const *args) {
 
@@ -358,11 +322,11 @@ void bme_thread(void const *args) {
     }
 }
 
-osThreadDef(led_thread, osPriorityNormal, DEFAULT_STACK_SIZE);
+//osThreadDef(led_thread, osPriorityNormal, DEFAULT_STACK_SIZE);
 osThreadDef(bme_thread, osPriorityNormal, DEFAULT_STACK_SIZE);
 
 int main(int argc, char *argv[]) {
-    osThreadCreate(osThread(led_thread), NULL);
+//    osThreadCreate(osThread(led_thread), NULL);
     osThreadCreate(osThread(bme_thread), NULL);
 
     getDeviceUUID(deviceUUID);
@@ -376,21 +340,18 @@ int main(int argc, char *argv[]) {
     sprintf(topic_send, topicTemplate, deviceUUID, "");
     printf("SEND: \"%s\"\r\n", topic_send);
 
-    mqttConnect(topic_receive, deviceUUID);
-
     while (1) {
 //        printf("send? %d %% ((%d / %d) == %d\r\n", loop_counter, MAX_INTERVAL, interval,
 //               loop_counter % (MAX_INTERVAL / interval));
 //        printf("temp (%d) > threshold (%d)?\r\n", ((int) (temperature * 100)), temp_threshold);
 //        printf("unsuccessful? == %d\r\n", unsuccessfulSend);
         if (((int) (temperature * 100)) > temp_threshold || (loop_counter % (MAX_INTERVAL / interval) == 0) || unsuccessfulSend) {
-            if (!mqttConnected)
-                mqttConnect(topic_receive, deviceUUID);
-
             pubMqttPayload(topic_send);
         }
-        client.yield(10000);
+
         loop_counter++;
         printf(".");
+        powerDownWakeupOnRtc(20);
+
     }
 }
