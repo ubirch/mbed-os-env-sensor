@@ -1,35 +1,12 @@
-/*!
- * @file
- * @brief Ubirch Board Environmental Sensor.
- *
- *Reads the environmental sensor values, signs the payload and sends it
- * to the backend using MQTT protocol
- *
- * @author Niranjan Rao
- * @date 2017-02-15
- *
- * @copyright &copys; 2015, 2016, 2017 ubirch GmbH (https://ubirch.com)
- *
- * ```
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- * ```
- */
+#if 1
 
-
-#include <BME280.h>
-
+#include "mbed.h"
+#include "http_request.h"
 #include "mbed-kinetis-lowpower/kinetis_lowpower.h"
 #include "mbed-os-quectelM66-driver/M66Interface.h"
+#include "../config.h"
+#include "BME280.h"
+
 
 #include "crypto/crypto.h"
 #include "response.h"
@@ -43,45 +20,24 @@
 #define PRINTF(...)
 #endif
 
-#define MQTT_PAYLOAD_LENGTH 512
 #define PRESSURE_SEA_LEVEL 101325
 #define TEMPERATURE_THRESHOLD 4000
 
+
+bool unsuccessfulSend = false;
 static int temp_threshold = TEMPERATURE_THRESHOLD;
 // internal sensor state
 static unsigned int interval = DEFAULT_INTERVAL;
-
-static bool mqttConnected = false;
-static bool unsuccessfulSend = false;
-
-static char lat[32], lon[32];
-static char deviceUUID[37];
-
 static int loop_counter = 0;
 
-int arrivedcount = 0;
-int level = 0;
-int voltage = 0;
 uint8_t error_flag = 0x00;
 
-//actual payload template
-static const char *const payload_template = "{\"t\":%d,\"p\":%d,\"h\":%d,\"a\":%d,\"la\":\"%s\",\"lo\":\"%s\",\"ba\":%d,\"lp\":%d,\"e\":%d}";
-
-static const char *const message_template = "POST /api/avatarService/v1/device/update HTTP/1.1\r\n"
-"Host: api.demo.dev.ubirch.com:8080\r\n"
-"\r\n"
-"{\"v\":\"0.0.2\",\"a\":\"%s\",\"k\":\"%s\",\"s\":\"%s\",\"p\":%s}"
-"\r\n";
-
-static const char *topicTemplate = "mwc/ubirch/devices/%s/%s";
-
-// crypto key of the board
-static uc_ed25519_key uc_key;
-
-float temperature, pressure, humidity, altitude;
-
 BME280 bmeSensor(I2C_SDA, I2C_SCL);
-M66Interface network(GSM_UART_TX, GSM_UART_RX, GSM_PWRKEY, GSM_POWER, true);
+M66Interface modem(GSM_UART_TX, GSM_UART_RX, GSM_PWRKEY, GSM_POWER, true);
+DigitalOut led(LED1);
+
+static float temperature, pressure, humidity, altitude;
+
 
 void dbg_dump(const char *prefix, const uint8_t *b, size_t size) {
     for (int i = 0; i < size; i += 16) {
@@ -98,131 +54,63 @@ void dbg_dump(const char *prefix, const uint8_t *b, size_t size) {
     }
 }
 
-// convert a number of characters into an unsigned integer value
-static unsigned int to_uint(const char *ptr, size_t len) {
-    unsigned int ret = 0;
-    for (uint8_t i = 0; i < len; i++) {
-        ret = (ret * 10) + (ptr[i] - '0');
+void dump_response(HttpResponse* res) {
+    printf("Status: %d - %s\n", res->get_status_code(), res->get_status_message().c_str());
+
+    printf("Headers:\n");
+    for (size_t ix = 0; ix < res->get_headers_length(); ix++) {
+        printf("\t%s: %s\n", res->get_headers_fields()[ix]->c_str(), res->get_headers_values()[ix]->c_str());
     }
-    return ret;
+    printf("\nBody (%d bytes):\n\n%s\n", res->get_body_length(), res->get_body_as_string().c_str());
 }
 
-/*!
- * Process payload and set configuration parameters from it.
- * @param payload the payload to use, should be checked
- */
-void process_payload(char *payload) {
-    jsmntok_t *token;
-    jsmn_parser parser;
-    jsmn_init(&parser);
+int HTTPSession() {
 
-    // identify the number of tokens in our response, we expect 13
-    const uint8_t token_count = (const uint8_t) jsmn_parse(&parser, payload, strlen(payload), NULL, 0);
-    token = (jsmntok_t *) malloc(sizeof(*token) * token_count);
+    // Create a TCP socket
+    printf("\n----- Setting up TCP connection -----\r\n");
 
-    // reset parser, parse and store tokens
-    jsmn_init(&parser);
-    if (jsmn_parse(&parser, payload, strlen(payload), token, token_count) == token_count &&
-        token[0].type == JSMN_OBJECT) {
-        uint8_t index = 0;
-        while (++index < token_count) {
-            if (jsoneq(payload, &token[index], P_INTERVAL) == 0 && token[index + 1].type == JSMN_PRIMITIVE) {
-                index++;
-                interval = to_uint(payload + token[index].start, (size_t) token[index].end - token[index].start);
-                PRINTF("Interval: %ds\r\n", interval);
-            } else if (jsoneq(payload, &token[index], P_THRESHOLD) == 0 && token[index + 1].type == JSMN_PRIMITIVE) {
-                index++;
-                temp_threshold = to_uint(payload + token[index].start, (size_t) token[index].end - token[index].start);
-                PRINTF("Threshold: %d\r\n", temp_threshold);
-            } else {
-                print_token("unknown key:", payload, &token[index]);
-                index++;
-            }
-        }
-    } else {
-        error_flag |= E_JSON_FAILED;
+    char theIP[20];
+    bool ipret = modem.queryIP("api.demo.dev.ubirch.com", theIP);
+
+    TCPSocket *socket = new TCPSocket();
+    nsapi_error_t open_result = socket->open(&modem);
+
+    if (open_result != 0) {
+        printf("Opening TCPSocket failed... %d\n", open_result);
+        return 1;
     }
 
-    free(token);
-}
-
-void messageArrived(char *buf) {
-    uc_ed25519_pub_pkcs8 response_key;
-    unsigned char response_signature[SHA512_HASH_SIZE];
-    memset(&response_key, 0xff, sizeof(uc_ed25519_pub_pkcs8));
-    memset(response_signature, 0xf7, SHA512_HASH_SIZE);
-
-
-    char *response_payload = process_response(buf, &response_key, response_signature);
-
-    dbg_dump("Received KEY    : ", (unsigned char *) &response_key, sizeof(uc_ed25519_pub_pkcs8));
-    dbg_dump("Received SIG    : ", response_signature, sizeof(response_signature));
-    PRINTF("Received PAYLOAD: %s\r\n", response_payload);
-
-    uc_ed25519_key remote_pub;
-    if (uc_import_ecc_pub_key_encoded(&remote_pub, &response_key)) {
-        if (uc_ecc_verify(&remote_pub, (const unsigned char *) response_payload, strlen(response_payload),
-                          response_signature, sizeof(response_signature))) {
-            process_payload(response_payload);
-            unsuccessfulSend = false;
-        } else {
-            PRINTF("payload verification failed\r\n");
-        }
-    } else {
-        PRINTF("import public key failed\r\n");
+    nsapi_error_t connect_result = socket->connect(theIP, 8080);
+    if (connect_result != 0) {
+        printf("Connecting over TCPSocket failed... %d\n", connect_result);
+        return 1;
     }
-
-    free(response_payload);
-}
-
-int getDeviceUUID(char *deviceID) {
-    uint32_t uuid[4];
-
-    uuid[0] = SIM->UIDH;
-    uuid[1] = SIM->UIDMH;
-    uuid[2] = SIM->UIDML;
-    uuid[3] = SIM->UIDL;
-
-    sprintf(deviceID, "%08lX-%04lX-%04lX-%04lX-%04lX%08lX",
-            uuid[0],                     // 8
-            uuid[1] >> 16,               // 4
-            uuid[1] & 0xFFFF,            // 4
-            uuid[2] >> 16,               // 4
-            uuid[2] & 0xFFFF, uuid[3]);  // 4+8
-
-    return true;
-}
-
-int pubMqttPayload(char *topic) {
-
-    TCPSocket socket;
-
     int rc;
     int ret;
+
+    int level = 0;
+    int voltage = 0;
+
+    static char lat[32], lon[32];
 
     uint8_t status = 0;
     bool gotLocation = false;
 
+    // crypto key of the board
+    static uc_ed25519_key uc_key;
+
     rtc_datetime_t date_time;
 
+    //actual payload template
+    static const char *const payload_template = "{\"t\":%d,\"p\":%d,\"h\":%d,\"a\":%d,\"la\":\"%s\",\"lo\":\"%s\",\"ba\":%d,\"lp\":%d,\"e\":%d}";
 
-    if (network.connect(CELL_APN, CELL_USER, CELL_PWD) != 0)
-        return false;
+    static const char *const message_template = "{\"v\":\"0.0.2\",\"a\":\"%s\",\"k\":\"%s\",\"s\":\"%s\",\"p\":%s}";
 
-    socket.open(&network);
-    socket.set_timeout(0);
-
-    network.getModemBattery(&status, &level, &voltage);
+    modem.getModemBattery(&status, &level, &voltage);
     printf("the battery status %d, level %d, voltage %d\r\n", status, level, voltage);
 
-    PRINTF("Connecting to %s:%d\r\n", UMQTT_HOST, UMQTT_HOST_PORT);
-    char theIP[20];
-    bool ipret = network.queryIP("api.demo.dev.ubirch.com", theIP);
-
-    ret = socket.connect(theIP, 8080);
-
     for (int lc = 0; lc < 3 && !gotLocation; lc++) {
-        gotLocation = network.get_location_date(lat, lon, &date_time);
+        gotLocation = modem.get_location_date(lat, lon, &date_time);
         PRINTF("setting current time from GSM\r\n");
         PRINTF("%04hd-%02hd-%02hd %02hd:%02hd:%02hd\r\n",
                date_time.year, date_time.month, date_time.day, date_time.hour, date_time.minute, date_time.second);
@@ -240,14 +128,14 @@ int pubMqttPayload(char *topic) {
                                 (int) (temperature * 100.0f), (int) pressure, (int) ((humidity) * 100.0f),
                                 (int) (altitude * 100.0f),
                                 lat, lon, level, loop_counter, error_flag);
-    char *payload = (char *)malloc((size_t) payload_size);
+    char *payload = (char *) malloc((size_t) payload_size);
     sprintf(payload, payload_template,
             (int) (temperature * 100.0f), (int) (pressure), (int) ((humidity) * 100.0f), (int) (altitude * 100.0f),
             lat, lon, level, loop_counter, error_flag);
 
     error_flag = 0x00;
 
-    const char *imei = network.get_imei();
+    const char *imei = modem.get_imei();
 
     // be aware that you need to free these strings after use
     char *auth_hash = uc_sha512_encoded((const unsigned char *) imei, strnlen(imei, 15));
@@ -272,43 +160,34 @@ int pubMqttPayload(char *topic) {
     PRINTF(message);
     PRINTF("\r\n--MESSAGE\r\n");
 
-//    if (ret >= 0) {
+    printf("Connected over TCP to httpbin.org:80\n");
 
-        int r = socket.send(message, strlen(message));
-        if (r > 0) {
-            // Recieve a simple http response and print out the response line
-            int buffer_size = message_size;
-            char *buffer = (char *) malloc((size_t) (message_size + 1));
+    // POST request to httpbin.org
+    {
+        HttpRequest *post_req = new HttpRequest(socket, HTTP_POST,
+                                                "http://api.demo.dev.ubirch.com/api/avatarService/v1/device/update");
+        post_req->set_header("Content-Type", "application/json");
 
-            printf("now receive the data\r\n");
-            r = socket.recv(buffer, 512);
-            if (r >= 0) {
-                printf("received %d bytes\r\n---\r\n%.*s\r\n---\r\n", r,
-                       (int) (strstr(buffer, "\r\n") - buffer),
-                       buffer);
-
-            } else {
-                printf("receive failed: %d\r\n", r);
-            }
-        } else {
-            printf("send failed: %d\r\n", r);
+        HttpResponse *post_res = post_req->send(message, strlen(message));
+        if (!post_res) {
+            printf("HttpRequest failed (error code %d)\n", post_req->get_error());
+            return 1;
         }
 
-        free(message);
-//    }
-    // Close the socket to return its memory and bring down the network interface
-    socket.close();
+        printf("\n----- HTTP POST response -----\n");
+        dump_response(post_res);
 
-    network.powerDown();
+        free(message);
+
+        delete post_req;
+    }
+    delete socket;
+
+    modem.powerDown();
+    powerDownWakeupOnRtc(30);
+
     return 0;
 }
-
-//void led_thread(void const *args) {
-//    while (true) {
-//        led1 = !led1;
-//        Thread::wait(1000);
-//    }
-//}
 
 void bme_thread(void const *args) {
 
@@ -321,37 +200,21 @@ void bme_thread(void const *args) {
         Thread::wait(10000);
     }
 }
-
-//osThreadDef(led_thread, osPriorityNormal, DEFAULT_STACK_SIZE);
 osThreadDef(bme_thread, osPriorityNormal, DEFAULT_STACK_SIZE);
 
-int main(int argc, char *argv[]) {
-//    osThreadCreate(osThread(led_thread), NULL);
+int main() {
+
+    printf("Env-sensor Test\r\n");
     osThreadCreate(osThread(bme_thread), NULL);
 
-    getDeviceUUID(deviceUUID);
-    int len = snprintf(NULL, 0, topicTemplate, deviceUUID, "out");
-    char *topic_receive = (char *)malloc((size_t) len);
-    sprintf(topic_receive, topicTemplate, deviceUUID, "out");
-    printf("RECEIVE: \"%s\"\r\n", topic_receive);
-
-    len = snprintf(NULL, 0, topicTemplate, deviceUUID, "");
-    char *topic_send = (char *)malloc((size_t) len);
-    sprintf(topic_send, topicTemplate, deviceUUID, "");
-    printf("SEND: \"%s\"\r\n", topic_send);
-
     while (1) {
-//        printf("send? %d %% ((%d / %d) == %d\r\n", loop_counter, MAX_INTERVAL, interval,
-//               loop_counter % (MAX_INTERVAL / interval));
-//        printf("temp (%d) > threshold (%d)?\r\n", ((int) (temperature * 100)), temp_threshold);
-//        printf("unsuccessful? == %d\r\n", unsuccessfulSend);
-        if (((int) (temperature * 100)) > temp_threshold || (loop_counter % (MAX_INTERVAL / interval) == 0) || unsuccessfulSend) {
-            pubMqttPayload(topic_send);
+        const int r = modem.connect(CELL_APN, CELL_USER, CELL_PWD);
+        if (r != 0) {
+            printf("Cannot connect to the network, see serial output");
+        } else {
+            HTTPSession();
         }
-
-        loop_counter++;
-        printf(".");
-        powerDownWakeupOnRtc(20);
-
     }
 }
+
+#endif
