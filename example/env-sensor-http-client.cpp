@@ -1,5 +1,3 @@
-#if 1
-
 #include "mbed.h"
 #include "http_request.h"
 #include "mbed-kinetis-lowpower/kinetis_lowpower.h"
@@ -216,5 +214,3 @@ int main() {
         }
     }
 }
-
-#endif

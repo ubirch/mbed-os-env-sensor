@@ -23,8 +23,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include "crypto/crypto.h"
-#include "jsmn/jsmn.h"
+#include "../crypto/crypto.h"
+#include "../jsmn/jsmn.h"
 #include "sensor.h"
 
 #define PRINTF printf
