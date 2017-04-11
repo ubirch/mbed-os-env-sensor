@@ -1,3 +1,0 @@
-/* lhash.h for openSSL */
-
-

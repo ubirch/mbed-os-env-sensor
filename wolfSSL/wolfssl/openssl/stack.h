@@ -1,3 +1,0 @@
-/* stack.h for openssl */
-
-

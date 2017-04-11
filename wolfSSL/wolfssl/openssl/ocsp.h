@@ -1,2 +1,0 @@
-/* ocsp.h for libcurl */
-
